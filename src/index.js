@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // ─────────────────────────────────────────────────────────────────────────────
 //  Claude Code Op — Node.js installer
-//  Developed by Ordis AI · github.com/ordisai/claude-code-op
+//  Developed by Ordis AI · github.com/ordisaidev/claude-code-op
 //  Run via:  npx claude-code-op
 // ─────────────────────────────────────────────────────────────────────────────
 'use strict';
@@ -170,7 +170,7 @@ function banner() {
   console.log('                                                              ╚═════╝ ╚═╝        ');
   console.log(`${C.reset}`);
   console.log(`  ${C.bold}Claude Code Op${C.reset} — Maximum token efficiency for Claude Code`);
-  console.log(`  Developed by ${C.cyan}Ordis AI${C.reset}  ·  github.com/ordisai/claude-code-op`);
+  console.log(`  Developed by ${C.cyan}Ordis AI${C.reset}  ·  github.com/ordisaidev/claude-code-op`);
   console.log('');
 }
 

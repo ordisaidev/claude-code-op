@@ -62,7 +62,7 @@ On every subsequent run, `npx claude-code-op` just shows the banner and opens Cl
 ### Alternative (clone + bash)
 
 ```bash
-git clone https://github.com/ordisai/claude-code-op
+git clone https://github.com/ordisaidev/claude-code-op
 cd claude-code-op
 chmod +x install.sh
 ./install.sh
