@@ -12,21 +12,19 @@ const os            = require('os');
 const { execSync, spawnSync } = require('child_process');
 
 const HOME     = os.homedir();
-const REPO_DIR = path.resolve(__dirname, '..');   // package root, wherever npx unpacks it
+const REPO_DIR = path.resolve(__dirname, '..');
 const HOOKS_DST       = path.join(HOME, '.claude', 'hooks');
 const SETTINGS        = path.join(HOME, '.claude', 'settings.json');
 const CLAUDE_JSON     = path.join(HOME, '.claude.json');
 const CAVEMAN_CFG_DIR = path.join(HOME, '.config', 'caveman');
 const PLUGIN_DST      = path.join(HOME, '.claude', 'plugins', 'marketplaces', 'thedotmack');
+const WIN             = process.platform === 'win32';
+const MAC             = process.platform === 'darwin';
 
 // ── colour helpers ─────────────────────────────────────────────────────────
 const C = {
-  reset:  '\x1b[0m',
-  bold:   '\x1b[1m',
-  red:    '\x1b[0;31m',
-  green:  '\x1b[0;32m',
-  yellow: '\x1b[1;33m',
-  cyan:   '\x1b[0;36m',
+  reset:  '\x1b[0m', bold: '\x1b[1m', red: '\x1b[0;31m',
+  green:  '\x1b[0;32m', yellow: '\x1b[1;33m', cyan: '\x1b[0;36m',
   orange: '\x1b[38;5;172m',
 };
 const ok   = m => console.log(`  ${C.green}✓${C.reset} ${m}`);
@@ -35,16 +33,25 @@ const warn = m => console.log(`  ${C.yellow}!${C.reset} ${m}`);
 const fail = m => console.log(`  ${C.red}✗${C.reset} ${m}`);
 const step = (n, m) => console.log(`\n${C.bold}[${n}]${C.reset} ${m}`);
 
-// ── PATH that finds every tool we install ─────────────────────────────────
+// ── cross-platform PATH ────────────────────────────────────────────────────
 function richPath() {
-  return [
+  const extra = [
     path.join(HOME, '.bun',   'bin'),
     path.join(HOME, '.local', 'bin'),
     path.join(HOME, '.cargo', 'bin'),
     '/opt/homebrew/bin',
     '/usr/local/bin',
-    process.env.PATH || '',
-  ].join(':');
+  ];
+  if (WIN) {
+    extra.push(
+      path.join(HOME, 'AppData', 'Local', 'Programs', 'bun'),
+      path.join(HOME, 'AppData', 'Roaming', 'uv', 'bin'),
+      path.join(HOME, '.local', 'bin'),
+      'C:\\Program Files\\bun',
+    );
+  }
+  const sep = WIN ? ';' : ':';
+  return [...extra, process.env.PATH || ''].join(sep);
 }
 
 function sh(cmd, opts = {}) {
@@ -52,32 +59,82 @@ function sh(cmd, opts = {}) {
     encoding: 'utf8',
     env: { ...process.env, PATH: richPath() },
     stdio: opts.silent ? 'pipe' : 'inherit',
+    shell: WIN ? 'cmd.exe' : '/bin/bash',
     ...opts,
   });
 }
 
-function has(bin) {
-  try { sh(`command -v ${bin}`, { silent: true }); return true; } catch { return false; }
+// Run a PowerShell command (Windows only)
+function ps(cmd, opts = {}) {
+  return execSync(`powershell -ExecutionPolicy ByPass -NoProfile -Command "${cmd.replace(/"/g, '\\"')}"`, {
+    encoding: 'utf8',
+    env: { ...process.env, PATH: richPath() },
+    stdio: opts.silent ? 'pipe' : 'inherit',
+    ...opts,
+  });
 }
 
-// ── sleep helper ──────────────────────────────────────────────────────────
+// Cross-platform binary check
+function has(bin) {
+  try {
+    if (WIN) {
+      execSync(`where ${bin}`, { stdio: 'pipe', env: { ...process.env, PATH: richPath() } });
+    } else {
+      execSync(`command -v ${bin}`, { stdio: 'pipe', shell: '/bin/bash', env: { ...process.env, PATH: richPath() } });
+    }
+    return true;
+  } catch { return false; }
+}
+
+// Pure-Node recursive file finder (replaces `find`)
+function findFile(dir, name) {
+  if (!fs.existsSync(dir)) return null;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) { const r = findFile(full, name); if (r) return r; }
+    else if (entry.name === name) return full;
+  }
+  return null;
+}
+
+// Pure-Node recursive copy (replaces `cp -r`)
+function cpR(src, dst) {
+  fs.mkdirSync(dst, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const s = path.join(src, entry.name), d = path.join(dst, entry.name);
+    entry.isDirectory() ? cpR(s, d) : fs.copyFileSync(s, d);
+  }
+}
+
+// ── interactive Y/N prompt (synchronous, works on all platforms) ───────────
+function ask(question, defaultYes = true) {
+  const hint = defaultYes ? '[Y/n]' : '[y/N]';
+  process.stdout.write(`  ${C.yellow}?${C.reset} ${question} ${hint} `);
+  // Read one line from stdin synchronously
+  if (!process.stdin.isTTY) {
+    // Non-interactive (piped) — default to yes
+    process.stdout.write('y\n');
+    return true;
+  }
+  try {
+    const buf = Buffer.alloc(256);
+    const n   = fs.readSync(process.stdin.fd, buf, 0, buf.length);
+    const ans = buf.slice(0, n).toString().trim().toLowerCase();
+    if (ans === '' ) return defaultYes;
+    return ans === 'y' || ans === 'yes';
+  } catch {
+    return defaultYes;
+  }
+}
+
+// ── sleep ──────────────────────────────────────────────────────────────────
 function sleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-// ── animated welcome box (matches Claude Code welcome screen style) ────────
+// ── animated welcome box ───────────────────────────────────────────────────
 function animatedBanner() {
-  // Smoke rises from the cigarette tip (─○) above the Claude head.
-  // Each frame = 5 smoke rows (top to bottom). Smoke column offset = 37.
-  // Uses two simultaneous puffs for the "puff puff" effect.
-  //
-  // Row index 0 = topmost row (furthest from cig), 4 = closest to cig.
-  //
-  // Puff lifecycle per column (left=older/higher, right=newer/lower):
-  //   born as '·' near cig → grows '(·)' → '(o)' → '(O)' → disperses '≋ ≋' → fades
-
   const frames = [
-    // [row0, row1, row2, row3, row4]  top→bottom
     ['          ','          ','          ','          ','    ·     '],
     ['          ','          ','          ','    ·     ','   (·)    '],
     ['          ','          ','    ·     ','   (·)    ','   (o)    '],
@@ -101,26 +158,16 @@ function animatedBanner() {
     ['          ','          ','          ','          ','    ·     '],
   ];
 
-  const COL = 34; // smoke column offset inside the box inner area
-
+  const COL = 34;
   function buildFrame(smoke) {
-    const W   = 66;
-    const pad = n => ' '.repeat(Math.max(0, n));
-
-    // visible-length aware padding (strips ANSI for measuring)
+    const W = 66, pad = n => ' '.repeat(Math.max(0, n));
     function vlen(s) { return s.replace(/\x1b\[[0-9;]*m/g, '').length; }
-    function rpad(s, w) { const v = vlen(s); return s + pad(Math.max(0, w - v)); }
-
-    const L = (inner) => `│ ${rpad(inner, W)} │`;
-
-    const smokeLines = smoke.map(s =>
-      L(`${pad(COL)}${C.cyan}${s}${C.reset}`)
-    );
-
+    function rpad(s, w) { return s + pad(Math.max(0, w - vlen(s))); }
+    const L = inner => `│ ${rpad(inner, W)} │`;
     return [
       `╭─── Claude Code Op ────────────────────────────────────────────────╮`,
       L(''),
-      ...smokeLines,
+      ...smoke.map(s => L(`${pad(COL)}${C.cyan}${s}${C.reset}`)),
       L(''),
       L(`${pad(21)}${C.cyan}${C.bold}▐▛█████▜▌${C.reset}`),
       L(`${pad(20)}${C.cyan}${C.bold}▝▜███████▛▘${C.reset}`),
@@ -137,140 +184,137 @@ function animatedBanner() {
   }
 
   const NLINES = buildFrame(frames[0]).length;
-
-  // Animate only when terminal supports ANSI cursor movement.
-  // Windows Terminal sets WT_SESSION; plain cmd/PowerShell does not.
   const canAnimate = process.stdout.isTTY && (
-    process.platform !== 'win32' ||
-    process.env.WT_SESSION ||
-    process.env.TERM_PROGRAM === 'vscode'
+    !WIN || process.env.WT_SESSION || process.env.TERM_PROGRAM === 'vscode'
   );
 
   if (!canAnimate) {
-    // Static: just print final frame (last frame has smoke mid-puff)
     for (const l of buildFrame(frames[4])) process.stdout.write(l + '\n');
     return;
   }
-
-  // Draw first frame
   for (const l of buildFrame(frames[0])) process.stdout.write(l + '\n');
-
-  // Animate remaining frames
   for (const smoke of frames.slice(1)) {
     sleep(120);
     process.stdout.write(`\x1b[${NLINES}A`);
-    for (const l of buildFrame(smoke)) {
-      process.stdout.write(`\x1b[2K${l}\n`);
-    }
+    for (const l of buildFrame(smoke)) process.stdout.write(`\x1b[2K${l}\n`);
   }
 }
 
-// ── banner ─────────────────────────────────────────────────────────────────
-function banner() {
-  console.log('');
-  animatedBanner();
-  console.log('');
-}
+function banner() { console.log(''); animatedBanner(); console.log(''); }
 
-// ── step 0 — install Claude Code CLI ─────────────────────────────────────
+// ── step 0 — Claude Code ───────────────────────────────────────────────────
 function installClaudeCode() {
-  step('0/9', 'Setting up Claude Code');
+  step('0/9', 'Claude Code (the AI coding CLI)');
+  if (has('claude')) { ok('Claude Code already installed'); return; }
 
-  if (has('claude')) {
-    ok('Claude Code already installed');
+  warn('claude not found.');
+  if (!ask('Install Claude Code now?')) {
+    warn('Skipping — install manually: https://claude.ai/download');
     return;
   }
-
-  const platform = process.platform;
-  info('Installing Claude Code (native installer)...');
-
-  if (platform === 'darwin' || platform === 'linux') {
-    try {
-      sh('curl -fsSL https://claude.ai/install.sh | bash');
-      ok('Claude Code installed');
-    } catch {
-      fail('Claude Code install failed. Install manually:');
-      fail('  macOS/Linux: curl -fsSL https://claude.ai/install.sh | bash');
-      fail('  Homebrew:    brew install --cask claude-code');
-      process.exit(1);
-    }
-  } else if (platform === 'win32') {
-    warn('Claude Code not found. After this installer finishes, run in PowerShell:');
-    warn('  irm https://claude.ai/install.ps1 | iex');
-    // Continue installing the rest of the stack — Claude Code can be added after
-  } else {
-    warn('Unknown platform — install Claude Code from https://claude.ai/download then re-run.');
-    process.exit(1);
+  info('Installing Claude Code...');
+  try {
+    if (WIN) ps('iwr https://claude.ai/install.ps1 -useb | iex');
+    else     sh('curl -fsSL https://claude.ai/install.sh | bash');
+    ok('Claude Code installed. First run opens browser for login.');
+  } catch {
+    fail('Install failed. Try manually:');
+    if (WIN) fail('  PowerShell: iwr https://claude.ai/install.ps1 -useb | iex');
+    else     fail('  macOS/Linux: curl -fsSL https://claude.ai/install.sh | bash');
+    if (MAC) fail('  Homebrew:   brew install --cask claude-code');
   }
-
-  // Auth: the first `claude` run opens the browser automatically.
-  // We don't try to automate it — just tell the user.
-  console.log('');
-  info('Claude Code needs a one-time login. A browser will open when you first run it.');
-  info('After this installer finishes, run: claude');
-  console.log('');
 }
 
 // ── step 1 — prerequisites ─────────────────────────────────────────────────
 function checkPrereqs() {
   step('1/9', 'Checking prerequisites');
 
-  // Node 18+
   const major = parseInt(process.version.slice(1).split('.')[0], 10);
   if (major >= 18) ok(`Node.js ${process.version}`);
-  else { fail(`Node.js 18+ required (found ${process.version})`); process.exit(1); }
+  else { fail(`Node.js 18+ required (found ${process.version}). Install from https://nodejs.org`); process.exit(1); }
 
-  // npm
-  if (has('npm')) ok(`npm ${sh('npm --version', { silent:true }).trim()}`);
+  if (has('npm')) ok(`npm ${sh('npm --version', { silent: true }).trim()}`);
   else { fail('npm not found — install Node.js from https://nodejs.org'); process.exit(1); }
 
-  // curl
-  if (has('curl')) ok('curl');
-  else { fail('curl not found'); process.exit(1); }
+  if (!WIN) {
+    if (has('curl')) ok('curl');
+    else { fail('curl not found — install via package manager'); process.exit(1); }
+  }
 
-  // claude CLI (optional — needed for plugin install)
-  if (has('claude')) ok('claude CLI');
-  else warn('claude CLI not in PATH — Caveman plugin install will be skipped');
+  if (has('claude')) ok('claude CLI in PATH');
+  else warn('claude CLI not in PATH yet — Caveman plugin install will be skipped');
 
-  // ensure dirs exist
   fs.mkdirSync(path.join(HOME, '.claude', 'hooks'), { recursive: true });
   fs.mkdirSync(path.join(HOME, '.claude', 'plugins', 'marketplaces'), { recursive: true });
 }
 
 // ── step 2 — uv ───────────────────────────────────────────────────────────
 function installUv() {
-  step('2/9', 'Installing uv (Python tool manager)');
-  if (has('uv')) { ok(`uv already installed (${sh('uv --version', { silent:true }).trim().split('\n')[0]})`); return; }
-  sh('curl -LsSf https://astral.sh/uv/install.sh | sh');
-  ok('uv installed');
+  step('2/9', 'uv — Python tool manager (needed for CRG + symdex)');
+  if (has('uv')) { ok(`uv ${sh('uv --version', { silent: true }).trim().split('\n')[0]}`); return; }
+
+  warn('uv not found.');
+  if (!ask('Install uv now?')) { warn('Skipping — code-review-graph and symdex will not install.'); return; }
+  info('Installing uv...');
+  try {
+    if (WIN) ps('irm https://astral.sh/uv/install.ps1 | iex');
+    else     sh('curl -LsSf https://astral.sh/uv/install.sh | sh');
+    ok('uv installed');
+  } catch { warn('uv install failed — run manually: https://docs.astral.sh/uv/getting-started/installation/'); }
 }
 
 // ── step 3 — bun ──────────────────────────────────────────────────────────
 function installBun() {
-  step('3/9', 'Installing Bun (for claude-mem)');
-  const bunBin = path.join(HOME, '.bun', 'bin', 'bun');
-  if (fs.existsSync(bunBin)) { ok(`Bun already installed (${sh(`"${bunBin}" --version`, { silent:true }).trim()})`); return; }
-  sh('curl -fsSL https://bun.sh/install | bash');
-  ok('Bun installed');
+  step('3/9', 'Bun — JS runtime (needed for claude-mem memory worker)');
+  if (has('bun')) { ok(`bun ${sh('bun --version', { silent: true }).trim()}`); return; }
+
+  warn('bun not found.');
+  if (!ask('Install Bun now?')) { warn('Skipping — claude-mem memory worker will not run.'); return; }
+  info('Installing Bun...');
+  try {
+    if (WIN) ps('irm bun.sh/install | iex');
+    else     sh('curl -fsSL https://bun.sh/install | bash');
+    ok('Bun installed');
+  } catch { warn('Bun install failed — run manually: https://bun.sh'); }
 }
 
 // ── step 4 — lean-ctx ─────────────────────────────────────────────────────
 function installLeanCtx() {
-  step('4/9', 'Installing lean-ctx (shell + file compression)');
-  if (has('lean-ctx')) {
-    ok(`lean-ctx already installed`);
+  step('4/9', 'lean-ctx — compresses file reads + shell output (up to 99% savings)');
+  if (!has('lean-ctx')) {
+    warn('lean-ctx not found.');
+    if (!ask('Install lean-ctx now?')) { warn('Skipping — file/shell compression disabled.'); return; }
+    info('Installing lean-ctx...');
+    try {
+      if (WIN) {
+        if (has('cargo')) {
+          sh('cargo install lean-ctx-bin');
+          ok('lean-ctx installed via cargo');
+        } else {
+          warn('lean-ctx on Windows requires Rust (cargo).');
+          if (ask('Install Rust (rustup) first?')) {
+            ps('irm https://win.rustup.rs -useb | iex');
+            sh('cargo install lean-ctx-bin');
+            ok('lean-ctx installed');
+          } else {
+            warn('Skipping lean-ctx.');
+            return;
+          }
+        }
+      } else {
+        sh('curl -fsSL https://leanctx.com/install.sh | sh');
+        ok('lean-ctx installed');
+      }
+    } catch { warn('lean-ctx install failed — skipping'); return; }
   } else {
-    info('Building via cargo install (~2 min)...');
-    sh('curl -fsSL https://leanctx.com/install.sh | sh');
-    ok('lean-ctx installed');
+    ok('lean-ctx already installed');
   }
-  info('Running lean-ctx setup...');
+
+  info('Configuring lean-ctx...');
   try {
-    // pipe 'n' to skip telemetry prompt
-    execSync('echo "n" | lean-ctx setup', {
-      encoding: 'utf8',
-      env: { ...process.env, PATH: richPath() },
-      stdio: 'pipe',
+    execSync(WIN ? 'lean-ctx setup --skip-confirm' : 'echo "n" | lean-ctx setup', {
+      encoding: 'utf8', env: { ...process.env, PATH: richPath() },
+      shell: WIN ? 'cmd.exe' : '/bin/bash', stdio: 'pipe',
     });
   } catch {
     try { sh('lean-ctx setup --skip-confirm', { silent: true }); } catch { /* ok */ }
@@ -278,89 +322,91 @@ function installLeanCtx() {
   ok('lean-ctx configured');
 }
 
-// ── step 5 — python tools ─────────────────────────────────────────────────
+// ── step 5 — code-review-graph + symdex ───────────────────────────────────
 function installPythonTools() {
-  step('5/9', 'Installing code-review-graph and symdex');
+  step('5/9', 'code-review-graph + symdex — codebase knowledge graph + symbol index');
+  if (!has('uv')) { warn('uv not found — skipping (install uv first)'); return; }
+
   if (has('code-review-graph')) {
     ok('code-review-graph already installed');
   } else {
-    info('Installing code-review-graph (Python 3.11)...');
-    sh('uv tool install code-review-graph --python 3.11');
-    ok('code-review-graph installed');
+    warn('code-review-graph not found.');
+    if (ask('Install code-review-graph? (8.2× token savings on code analysis)')) {
+      info('Installing code-review-graph...');
+      try { sh('uv tool install code-review-graph --python 3.11'); ok('code-review-graph installed'); }
+      catch { warn('code-review-graph install failed'); }
+    } else { warn('Skipping code-review-graph.'); }
   }
+
   if (has('symdex')) {
     ok('symdex already installed');
   } else {
-    info('Installing symdex (Python 3.11)...');
-    sh('uv tool install symdex --python 3.11');
-    ok('symdex installed');
+    warn('symdex not found.');
+    if (ask('Install symdex? (97% token savings on symbol lookups)')) {
+      info('Installing symdex...');
+      try { sh('uv tool install symdex --python 3.11'); ok('symdex installed'); }
+      catch { warn('symdex install failed'); }
+    } else { warn('Skipping symdex.'); }
   }
 }
 
 // ── step 6 — caveman ──────────────────────────────────────────────────────
 function installCaveman() {
-  step('6/9', 'Installing Caveman (terse speech compression)');
+  step('6/9', 'Caveman — compresses Claude\'s output (65-75% fewer output tokens)');
   let alreadyInstalled = false;
   try {
-    const list = sh('claude plugin list 2>/dev/null', { silent: true });
+    const list = sh('claude plugin list', { silent: true });
     if (list.includes('caveman')) alreadyInstalled = true;
   } catch { /* ignore */ }
 
   if (alreadyInstalled) {
-    ok('Caveman plugin already installed');
-  } else if (has('claude')) {
-    try { sh('claude plugin marketplace add JuliusBrussee/caveman 2>/dev/null || true', { silent: true }); } catch { /* ok */ }
-    try { sh('claude plugin install caveman@caveman 2>/dev/null || true', { silent: true }); ok('Caveman plugin installed'); } catch { warn('Plugin install failed — continuing'); }
-  } else {
-    warn('claude CLI not found — run manually after install:');
+    ok('Caveman already installed');
+  } else if (!has('claude')) {
+    warn('claude CLI not found — cannot install Caveman plugin.');
+    warn('  After installing Claude Code, run:');
     warn('  claude plugin marketplace add JuliusBrussee/caveman');
     warn('  claude plugin install caveman@caveman');
+  } else {
+    warn('Caveman plugin not found.');
+    if (ask('Install Caveman now?')) {
+      try { sh('claude plugin marketplace add JuliusBrussee/caveman', { silent: true }); } catch { /* ok */ }
+      try { sh('claude plugin install caveman@caveman', { silent: true }); ok('Caveman installed'); }
+      catch { warn('Install failed — run manually: claude plugin install caveman@caveman'); }
+    } else { warn('Skipping Caveman.'); }
   }
 
   fs.mkdirSync(CAVEMAN_CFG_DIR, { recursive: true });
   fs.writeFileSync(path.join(CAVEMAN_CFG_DIR, 'config.json'), JSON.stringify({ defaultMode: 'ultra' }));
   fs.writeFileSync(path.join(HOME, '.claude', '.caveman-active'), 'ultra');
-  ok('Caveman set to ultra mode');
+  ok('Caveman → ultra mode');
 }
 
 // ── step 7 — claude-mem ───────────────────────────────────────────────────
 function installClaudeMem() {
-  step('7/9', 'Installing claude-mem (persistent memory)');
+  step('7/9', 'claude-mem — persistent memory across sessions');
   const mcpServer = path.join(PLUGIN_DST, 'plugin', 'scripts', 'mcp-server.cjs');
+  if (fs.existsSync(mcpServer)) { ok('claude-mem already present'); return; }
 
-  if (fs.existsSync(mcpServer)) {
-    ok('claude-mem plugin files already present');
-    return;
-  }
+  warn('claude-mem not found.');
+  if (!ask('Install claude-mem now?')) { warn('Skipping — cross-session memory disabled.'); return; }
+  info('Downloading claude-mem...');
+  const tmpDir = path.join(os.tmpdir(), 'claude-mem-install');
+  try { sh(`npm install --prefix "${tmpDir}" claude-mem`, { silent: true }); } catch { /* may already be cached */ }
 
-  info('Downloading claude-mem via npm...');
-  try {
-    sh('npm install --prefix /tmp/claude-mem-install claude-mem', { silent: true });
-  } catch { /* continue — package might already be cached */ }
-
-  // Locate mcp-server.cjs in npm cache or tmp install
+  // Pure-Node search for mcp-server.cjs
+  const searchRoots = [path.join(HOME, '.npm', '_npx'), tmpDir];
   let found = null;
-  const searchRoots = [
-    path.join(HOME, '.npm', '_npx'),
-    '/tmp/claude-mem-install',
-  ];
-  for (const root of searchRoots) {
-    if (!fs.existsSync(root)) continue;
-    try {
-      const r = sh(`find "${root}" -name "mcp-server.cjs" 2>/dev/null | head -1`, { silent: true }).trim();
-      if (r) { found = r; break; }
-    } catch { /* ok */ }
-  }
+  for (const root of searchRoots) { found = findFile(root, 'mcp-server.cjs'); if (found) break; }
 
   if (found) {
-    const pluginSrc = path.dirname(path.dirname(found)); // scripts/../
+    const pluginSrc = path.dirname(path.dirname(found));
     fs.mkdirSync(PLUGIN_DST, { recursive: true });
-    sh(`cp -r "${pluginSrc}" "${path.join(PLUGIN_DST, 'plugin')}"`);
-    ok(`claude-mem installed to ${path.join(PLUGIN_DST, 'plugin')}`);
+    cpR(pluginSrc, path.join(PLUGIN_DST, 'plugin'));
+    ok('claude-mem installed');
   } else {
     warn('Auto-install failed. Trying: npx claude-mem install');
     try { sh('npx claude-mem install', { silent: true }); ok('claude-mem installed via npx'); }
-    catch { warn('claude-mem install failed — memory features may not work. Run: npx claude-mem install'); }
+    catch { warn('claude-mem install failed — run: npx claude-mem install'); }
   }
 
   fs.writeFileSync(path.join(HOME, '.claude', '.mem-active'), 'on');
@@ -369,70 +415,64 @@ function installClaudeMem() {
 
 // ── step 8 — hooks, config, MCP ───────────────────────────────────────────
 function installHooksAndConfig() {
-  step('8/9', 'Installing hooks, config, and MCP servers');
+  step('8/9', 'Hooks, statusline, and MCP servers — wires everything into Claude Code');
 
-  // Copy hook files from package
+  if (!ask('Install hooks and MCP config into ~/.claude/?')) {
+    warn('Skipping — statusline and toggles will not work.');
+    return;
+  }
   info('Copying hook files...');
   const hooksSource = path.join(REPO_DIR, 'hooks');
   for (const f of fs.readdirSync(hooksSource)) {
     const src = path.join(hooksSource, f);
     const dst = path.join(HOOKS_DST, f);
     fs.copyFileSync(src, dst);
-    if (f.endsWith('.sh')) fs.chmodSync(dst, 0o755);
+    if (!WIN && f.endsWith('.sh')) fs.chmodSync(dst, 0o755);
   }
-  ok(`Hooks copied to ${HOOKS_DST}`);
+  ok(`Hooks → ${HOOKS_DST}`);
 
-  // Merge settings.json
   info('Merging settings.json...');
   sh(`node "${path.join(REPO_DIR, 'scripts', 'merge-settings.js')}"`, { silent: true });
   ok('settings.json updated');
 
-  // Merge .claude.json (MCP servers)
-  info('Merging MCP servers into .claude.json...');
+  info('Merging MCP servers...');
   sh(`node "${path.join(REPO_DIR, 'scripts', 'merge-mcp.js')}"`, { silent: true });
   ok('.claude.json updated');
 
-  // Append CLAUDE.md rules
   const claudeMd = path.join(HOME, '.claude', 'CLAUDE.md');
   const ruleSrc  = path.join(REPO_DIR, 'config', 'CLAUDE.md');
   let existing = '';
-  try { existing = fs.readFileSync(claudeMd, 'utf8'); } catch { /* new file */ }
+  try { existing = fs.readFileSync(claudeMd, 'utf8'); } catch { /* new */ }
   if (!existing.includes('lean-ctx-rules')) {
     fs.appendFileSync(claudeMd, '\n' + fs.readFileSync(ruleSrc, 'utf8'));
     ok('CLAUDE.md updated');
   } else {
-    ok('CLAUDE.md already has lean-ctx rules');
+    ok('CLAUDE.md already up-to-date');
   }
 
-  // Caveman config
   fs.mkdirSync(CAVEMAN_CFG_DIR, { recursive: true });
-  fs.copyFileSync(
-    path.join(REPO_DIR, 'config', 'caveman-config.json'),
-    path.join(CAVEMAN_CFG_DIR, 'config.json')
-  );
+  fs.copyFileSync(path.join(REPO_DIR, 'config', 'caveman-config.json'), path.join(CAVEMAN_CFG_DIR, 'config.json'));
 
-  // Initialise flag files
   for (const flag of ['lean-ctx', 'crg', 'sym', 'mem']) {
     fs.writeFileSync(path.join(HOME, '.claude', `.${flag}-active`), 'on');
   }
   ok('Flag files initialized');
 }
 
-// ── step 9 — launch (or finish) ───────────────────────────────────────────
+// ── step 9 — launch ───────────────────────────────────────────────────────
 function launchClaude() {
   step('9/9', 'Launching Claude Code');
-
   console.log('');
   animatedBanner();
   console.log('');
-  console.log(`  ${C.bold}${C.green}Ready. Starting Claude Code with full optimization stack...${C.reset}`);
+  console.log(`  ${C.bold}${C.green}Ready. Starting Claude Code...${C.reset}`);
   console.log('');
 
-  // Hand off to claude — replaces this process
   const passArgs = process.argv.slice(2).filter(a => a !== '--install' && a !== '--reinstall');
   const r = spawnSync('claude', passArgs, {
     stdio: 'inherit',
     env: { ...process.env, PATH: richPath() },
+    shell: WIN,
   });
   process.exit(r.status ?? 0);
 }
@@ -444,30 +484,16 @@ function printSummary() {
   console.log(`${C.bold}  Claude Code Op — Installation Complete${C.reset}`);
   console.log(`${C.green}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C.reset}`);
   console.log('');
-  console.log(`  ${C.bold}Active tools:${C.reset}`);
-  console.log(`  ${C.orange}[CAVEMAN:ULTRA]${C.reset}  Terse speech — 65-75% output token savings`);
-  console.log(`  ${C.green}[CTX:ON]${C.reset}        lean-ctx — up to 99% file read token savings`);
-  console.log(`  ${C.cyan}[CRG:ON]${C.reset}        code-review-graph — 8.2× code analysis savings`);
-  console.log(`  ${C.cyan}[SYM:ON]${C.reset}        symdex — 97% symbol lookup token savings`);
-  console.log(`  ${C.cyan}[MEM:folder]${C.reset}    claude-mem — persistent cross-session memory`);
+  console.log(`  ${C.orange}[CAVEMAN:ULTRA]${C.reset}  65-75% output token savings`);
+  console.log(`  ${C.green}[CTX:ON]${C.reset}        up to 99% file read token savings`);
+  console.log(`  ${C.cyan}[CRG:ON]${C.reset}        8.2× code analysis savings`);
+  console.log(`  ${C.cyan}[SYM:ON]${C.reset}        97% symbol lookup savings`);
+  console.log(`  ${C.cyan}[MEM:folder]${C.reset}    persistent cross-session memory`);
   console.log('');
-  console.log(`  ${C.bold}Statusline (2 lines, live after every response):${C.reset}`);
-  console.log(`  ${C.orange}[CAVEMAN:ULTRA]${C.reset} ${C.green}[CTX:ON]${C.reset} ${C.cyan}[CRG:ON]${C.reset} [SYM:ON] [MEM:project]`);
-  console.log('  Model | Context% | 5h rate | 7d rate | $cost');
+  console.log(`  ${C.bold}Toggle mid-session:${C.reset}`);
+  console.log('  "caveman ultra/lite/off"  "ctx off/on"  "crg off/on"  "mem off/on"');
   console.log('');
-  console.log(`  ${C.bold}Per-project scope (auto on every folder):${C.reset}`);
-  console.log('  .code-review-graph/  — code knowledge graph');
-  console.log('  .symdex/             — symbol index');
-  console.log('  .claude-mem/         — session memory');
-  console.log('');
-  console.log(`  ${C.bold}Toggle commands (say these to Claude):${C.reset}`);
-  console.log('  "caveman ultra" / "caveman lite" / "stop caveman"');
-  console.log('  "ctx off" / "ctx on"');
-  console.log('  "crg off" / "crg on" / "graph off"');
-  console.log('  "sym off" / "sym on"');
-  console.log('  "mem off" / "mem on"');
-  console.log('');
-  console.log(`  ${C.bold}${C.yellow}Restart Claude Code to activate all changes.${C.reset}`);
+  console.log(`  ${C.bold}${C.yellow}Restart Claude Code to activate.${C.reset}`);
   console.log('');
 }
 
@@ -478,11 +504,9 @@ const forceInstall   = args.includes('--install') || args.includes('--reinstall'
 const alreadyDone    = fs.existsSync(INSTALLED_FLAG) && !forceInstall;
 
 if (alreadyDone) {
-  // Already set up — just show banner and launch claude
   banner();
   launchClaude();
 } else {
-  // Fresh install (or --reinstall)
   banner();
   installClaudeCode();
   checkPrereqs();
@@ -493,9 +517,7 @@ if (alreadyDone) {
   installCaveman();
   installClaudeMem();
   installHooksAndConfig();
-  // Mark as installed
   fs.writeFileSync(INSTALLED_FLAG, new Date().toISOString());
   printSummary();
-  // Launch claude after install
   launchClaude();
 }
