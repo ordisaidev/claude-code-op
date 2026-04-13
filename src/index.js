@@ -138,6 +138,20 @@ function animatedBanner() {
 
   const NLINES = buildFrame(frames[0]).length;
 
+  // Animate only when terminal supports ANSI cursor movement.
+  // Windows Terminal sets WT_SESSION; plain cmd/PowerShell does not.
+  const canAnimate = process.stdout.isTTY && (
+    process.platform !== 'win32' ||
+    process.env.WT_SESSION ||
+    process.env.TERM_PROGRAM === 'vscode'
+  );
+
+  if (!canAnimate) {
+    // Static: just print final frame (last frame has smoke mid-puff)
+    for (const l of buildFrame(frames[4])) process.stdout.write(l + '\n');
+    return;
+  }
+
   // Draw first frame
   for (const l of buildFrame(frames[0])) process.stdout.write(l + '\n');
 
@@ -155,22 +169,6 @@ function animatedBanner() {
 function banner() {
   console.log('');
   animatedBanner();
-  console.log('');
-  console.log('  ██████╗██╗      █████╗ ██╗   ██╗██████╗ ███████╗     ██████╗ ██████╗ ██████╗ ');
-  console.log(' ██╔════╝██║     ██╔══██╗██║   ██║██╔══██╗██╔════╝    ██╔════╝██╔═══██╗██╔══██╗');
-  console.log(' ██║     ██║     ███████║██║   ██║██║  ██║█████╗      ██║     ██║   ██║██║  ██║');
-  console.log(' ██║     ██║     ██╔══██║██║   ██║██║  ██║██╔══╝      ██║     ██║   ██║██║  ██║');
-  console.log(' ╚██████╗███████╗██║  ██║╚██████╔╝██████╔╝███████╗    ╚██████╗╚██████╔╝██████╔╝');
-  console.log('  ╚═════╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚══════╝     ╚═════╝ ╚═════╝ ╚═════╝');
-  console.log('                                                              ██████╗ ██████╗    ');
-  console.log('                                                             ██╔═══██╗██╔══██╗   ');
-  console.log('                                                             ██║   ██║██████╔╝   ');
-  console.log('                                                             ██║   ██║██╔═══╝    ');
-  console.log('                                                             ╚██████╔╝██║        ');
-  console.log('                                                              ╚═════╝ ╚═╝        ');
-  console.log(`${C.reset}`);
-  console.log(`  ${C.bold}Claude Code Op${C.reset} — Maximum token efficiency for Claude Code`);
-  console.log(`  Developed by ${C.cyan}Ordis AI${C.reset}  ·  github.com/ordisaidev/claude-code-op`);
   console.log('');
 }
 
@@ -197,9 +195,9 @@ function installClaudeCode() {
       process.exit(1);
     }
   } else if (platform === 'win32') {
-    info('Run this in PowerShell to install Claude Code, then re-run claude-code-op:');
-    info('  irm https://claude.ai/install.ps1 | iex');
-    process.exit(0);
+    warn('Claude Code not found. After this installer finishes, run in PowerShell:');
+    warn('  irm https://claude.ai/install.ps1 | iex');
+    // Continue installing the rest of the stack — Claude Code can be added after
   } else {
     warn('Unknown platform — install Claude Code from https://claude.ai/download then re-run.');
     process.exit(1);
