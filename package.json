@@ -1,0 +1,35 @@
+{
+  "name": "claude-code-op",
+  "version": "1.0.0",
+  "description": "Maximum token efficiency for Claude Code — one install, every project.",
+  "bin": {
+    "claude-code-op": "./bin/cli.js"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "hooks/",
+    "config/",
+    "scripts/"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "author": "Ordis AI <https://github.com/ordisai>",
+  "license": "MIT",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "token-efficiency",
+    "mcp",
+    "ai",
+    "caveman",
+    "lean-ctx",
+    "symdex"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ordisai/claude-code-op.git"
+  },
+  "homepage": "https://github.com/ordisai/claude-code-op"
+}

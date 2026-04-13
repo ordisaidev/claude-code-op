@@ -35,6 +35,32 @@ Combined: **80–99% fewer tokens** depending on workload. See [BENEFITS.md](./B
 
 ## Install
 
+### One command (recommended)
+
+```bash
+npx claude-code-op
+```
+
+That's it. On first run it:
+1. Installs **Claude Code** (via `curl -fsSL https://claude.ai/install.sh | bash`) if not present
+2. Installs uv, Bun, lean-ctx, code-review-graph, symdex, Caveman, claude-mem
+3. Wires hooks, MCP servers, and the 2-line statusline into `~/.claude/`
+4. Shows the animated gigchad Claude banner and launches Claude Code
+
+On every subsequent run, `npx claude-code-op` just shows the banner and opens Claude Code. Pass `--reinstall` to re-run the full setup.
+
+> **First-time login:** Claude Code handles auth itself. When you run `claude` for the first time after install, a browser window opens for OAuth. Requires a Claude Pro / Max / Team / Enterprise account.
+
+### Flags
+
+| Flag | Effect |
+|------|--------|
+| *(none)* | Fresh install on first run, launcher on repeat runs |
+| `--reinstall` | Force re-run the full install even if already set up |
+| Any other args | Passed through to `claude` (e.g. `npx claude-code-op -c`) |
+
+### Alternative (clone + bash)
+
 ```bash
 git clone https://github.com/ordisai/claude-code-op
 cd claude-code-op
@@ -42,17 +68,17 @@ chmod +x install.sh
 ./install.sh
 ```
 
-Then **restart Claude Code**.
-
 ### Requirements
 
-- macOS or Linux
+- macOS or Linux (Windows: run `irm https://claude.ai/install.ps1 | iex` first)
 - Node.js 18+
-- npm
 - curl
-- `claude` CLI (Claude Code) in PATH
 
-The installer handles everything else: uv, Bun, Rust/cargo, all tools.
+Everything else — Claude Code, uv, Bun, Rust/cargo, all tools — is installed automatically.
+
+### Claude Code
+
+Claude Code is Anthropic's official CLI. Source: [github.com/anthropics/claude-code](https://github.com/anthropics/claude-code)
 
 ---
 
