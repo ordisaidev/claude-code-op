@@ -271,11 +271,38 @@ function installBun() {
   warn('bun not found.');
   if (!ask('Install Bun now?')) { warn('Skipping — claude-mem memory worker will not run.'); return; }
   info('Installing Bun...');
-  try {
-    if (WIN) ps('irm bun.sh/install | iex');
-    else     sh('curl -fsSL https://bun.sh/install | bash');
-    ok('Bun installed');
-  } catch { warn('Bun install failed — run manually: https://bun.sh'); }
+
+  let installed = false;
+
+  // Method 1: official installer
+  if (!installed) {
+    try {
+      if (WIN) ps('irm bun.sh/install | iex');
+      else     sh('curl -fsSL https://bun.sh/install | bash');
+      installed = has('bun');
+    } catch { /* try next */ }
+  }
+
+  // Method 2: npm fallback (slower but works everywhere npm works)
+  if (!installed) {
+    info('Official installer failed — trying npm fallback...');
+    try {
+      sh('npm install -g bun', { silent: true });
+      installed = has('bun');
+    } catch { /* try next */ }
+  }
+
+  // Method 3: Homebrew (macOS)
+  if (!installed && MAC) {
+    info('Trying Homebrew...');
+    try {
+      sh('brew install bun', { silent: true });
+      installed = has('bun');
+    } catch { /* give up */ }
+  }
+
+  if (installed) ok('Bun installed');
+  else warn('Bun install failed — claude-mem disabled. Install manually: https://bun.sh');
 }
 
 // ── step 4 — lean-ctx ─────────────────────────────────────────────────────
@@ -497,11 +524,114 @@ function printSummary() {
   console.log('');
 }
 
+// ── uninstall ──────────────────────────────────────────────────────────────
+function uninstall() {
+  banner();
+  console.log(`${C.bold}${C.red}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C.reset}`);
+  console.log(`${C.bold}  Claude Code Op — Uninstaller${C.reset}`);
+  console.log(`${C.red}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C.reset}`);
+  console.log('');
+  warn('This removes all Claude Code Op hooks, flags, and MCP entries.');
+  warn('Tool binaries (lean-ctx, uv, bun, etc.) are NOT removed.');
+  if (!ask('Continue with uninstall?', false)) {
+    console.log('Cancelled.');
+    process.exit(0);
+  }
+
+  // Remove hook files
+  const hookFiles = [
+    'combined-statusline.js','project-init.js','lean-ctx-session-init.js',
+    'lean-ctx-toggle.js','graph-toggle.js','mem-toggle.js',
+    'caveman-activate.js','caveman-mode-tracker.js','crg-update.sh','smart-install.js',
+  ];
+  for (const f of hookFiles) {
+    const p = path.join(HOOKS_DST, f);
+    try { fs.rmSync(p); ok(`removed hook: ${f}`); } catch { /* not present */ }
+  }
+
+  // Remove flag files
+  for (const f of ['.lean-ctx-active','.crg-active','.sym-active','.mem-active','.caveman-active','.claude-code-op-installed']) {
+    try { fs.rmSync(path.join(HOME, '.claude', f)); } catch { /* ok */ }
+  }
+
+  // Remove our hooks from settings.json
+  try {
+    const cfg = JSON.parse(fs.readFileSync(SETTINGS, 'utf8'));
+    const ourCmds = ['caveman-activate','lean-ctx-session-init','project-init','smart-install',
+                     'worker-service','caveman-mode-tracker','lean-ctx-toggle','graph-toggle',
+                     'mem-toggle','crg-update','lean-ctx hook','combined-statusline'];
+    for (const event of Object.keys(cfg.hooks || {})) {
+      cfg.hooks[event] = (cfg.hooks[event] || []).filter(group => {
+        const allHooks = group.hooks || [];
+        return !allHooks.some(h => ourCmds.some(c => (h.command || '').includes(c)));
+      });
+    }
+    if (cfg.statusLine && (cfg.statusLine.command || '').includes('combined-statusline')) {
+      delete cfg.statusLine;
+    }
+    fs.writeFileSync(SETTINGS, JSON.stringify(cfg, null, 2));
+    ok('Hooks removed from settings.json');
+  } catch { warn('Could not clean settings.json'); }
+
+  // Remove our MCP servers from .claude.json
+  try {
+    const cfg = JSON.parse(fs.readFileSync(CLAUDE_JSON, 'utf8'));
+    for (const name of ['lean-ctx','code-review-graph','symdex','claude-mem']) {
+      if (cfg.mcpServers && cfg.mcpServers[name]) {
+        delete cfg.mcpServers[name];
+        ok(`removed MCP: ${name}`);
+      }
+    }
+    fs.writeFileSync(CLAUDE_JSON, JSON.stringify(cfg, null, 2));
+  } catch { warn('Could not clean .claude.json'); }
+
+  // Remove lean-ctx-rules block from CLAUDE.md
+  try {
+    const claudeMd = path.join(HOME, '.claude', 'CLAUDE.md');
+    let content = fs.readFileSync(claudeMd, 'utf8');
+    const marker = '# lean-ctx';
+    const idx = content.indexOf(marker);
+    if (idx !== -1) {
+      content = content.slice(0, idx).trimEnd();
+      fs.writeFileSync(claudeMd, content);
+      ok('lean-ctx rules removed from CLAUDE.md');
+    }
+  } catch { /* ok */ }
+
+  console.log('');
+  ok(`Claude Code Op removed. Restart Claude Code.`);
+  console.log('');
+  console.log(`  To reinstall: ${C.cyan}npx claude-code-op --reinstall${C.reset}`);
+  console.log('');
+}
+
+// ── help ───────────────────────────────────────────────────────────────────
+function showHelp() {
+  console.log('');
+  console.log(`${C.bold}claude-code-op${C.reset} — Maximum token efficiency for Claude Code`);
+  console.log(`Developed by Ordis AI · github.com/ordisaidev/claude-code-op`);
+  console.log('');
+  console.log(`${C.bold}Usage:${C.reset}`);
+  console.log('  npx claude-code-op              Launch Claude Code (install on first run)');
+  console.log('  npx claude-code-op --reinstall  Force re-run the full installer');
+  console.log('  npx claude-code-op --uninstall  Remove all hooks and MCP config');
+  console.log('  npx claude-code-op --help       Show this message');
+  console.log('  npx claude-code-op -c           Pass flags through to claude');
+  console.log('');
+  console.log(`${C.bold}What gets installed:${C.reset}`);
+  console.log('  Claude Code, uv, Bun, lean-ctx, code-review-graph, symdex, Caveman, claude-mem');
+  console.log('');
+}
+
 // ── main ──────────────────────────────────────────────────────────────────
 const INSTALLED_FLAG = path.join(HOME, '.claude', '.claude-code-op-installed');
 const args           = process.argv.slice(2);
-const forceInstall   = args.includes('--install') || args.includes('--reinstall');
-const alreadyDone    = fs.existsSync(INSTALLED_FLAG) && !forceInstall;
+
+if (args.includes('--help') || args.includes('-h')) { showHelp(); process.exit(0); }
+if (args.includes('--uninstall'))                   { uninstall(); process.exit(0); }
+
+const forceInstall = args.includes('--install') || args.includes('--reinstall');
+const alreadyDone  = fs.existsSync(INSTALLED_FLAG) && !forceInstall;
 
 if (alreadyDone) {
   banner();
