@@ -116,6 +116,7 @@ async function main() {
 
   try {
     fs.writeFileSync(outFile, lines.join('\n'));
+    process.stdout.write(`✓ Session state saved → ${path.relative(HOME, outFile)}`);
   } catch { /* silent */ }
 
   process.exit(0);

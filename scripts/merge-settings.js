@@ -91,6 +91,7 @@ const OUR_HOOKS = {
   UserPromptSubmit: [{
     hooks: [
       { type:"command", command: h('compact-warn.js'),          timeout:3, statusMessage:"Checking context..."        },
+      { type:"command", command: h('save-quit.js'),             timeout:3, statusMessage:"Checking for save/quit..."  },
       { type:"command", command: h('caveman-mode-tracker.js'),  timeout:5, statusMessage:"Tracking caveman mode..."  },
       { type:"command", command: h('lean-ctx-toggle.js'),       timeout:5, statusMessage:"Checking lean-ctx state..." },
       { type:"command", command: h('graph-toggle.js'),          timeout:5, statusMessage:"Checking graph/sym state..." },
@@ -152,7 +153,7 @@ function isOurHook(cmd) {
   return ['caveman-activate','lean-ctx-session-init','project-init','smart-install',
           'worker-service','caveman-mode-tracker','lean-ctx-toggle','graph-toggle',
           'mem-toggle','crg-update','lean-ctx hook','combined-statusline',
-          'bun-runner','CLAUDE_MEM','lean-ctx-session','compact-warn','session-handoff'
+          'bun-runner','CLAUDE_MEM','lean-ctx-session','compact-warn','session-handoff','save-quit'
   ].some(marker => (cmd || '').includes(marker));
 }
 
