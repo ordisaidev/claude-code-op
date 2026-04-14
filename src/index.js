@@ -21,11 +21,15 @@ const PLUGIN_DST      = path.join(HOME, '.claude', 'plugins', 'marketplaces', 't
 const WIN             = process.platform === 'win32';
 const MAC             = process.platform === 'darwin';
 
-// ── colour helpers ─────────────────────────────────────────────────────────
+// ── colour helpers — disabled on Windows without VT support ───────────────
+const HAS_COLOR = process.stdout.isTTY && (
+  !WIN || process.env.WT_SESSION || process.env.TERM_PROGRAM || process.env.COLORTERM
+);
+function cc(code) { return HAS_COLOR ? code : ''; }
 const C = {
-  reset:  '\x1b[0m', bold: '\x1b[1m', red: '\x1b[0;31m',
-  green:  '\x1b[0;32m', yellow: '\x1b[1;33m', cyan: '\x1b[0;36m',
-  orange: '\x1b[38;5;172m',
+  reset:  cc('\x1b[0m'),  bold:   cc('\x1b[1m'),   red:    cc('\x1b[0;31m'),
+  green:  cc('\x1b[0;32m'), yellow: cc('\x1b[1;33m'), cyan:   cc('\x1b[0;36m'),
+  orange: cc('\x1b[38;5;172m'),
 };
 const ok   = m => console.log(`  ${C.green}✓${C.reset} ${m}`);
 const info = m => console.log(`  ${C.cyan}→${C.reset} ${m}`);
@@ -159,13 +163,26 @@ function animatedBanner() {
   ];
 
   const COL = 34;
+  // Box inner width = 66, total line = │ + space + 66 + space + │ = 70
+  const W   = 66;
+  const TOP = `╭─── Claude Code Op ${'─'.repeat(W - 17)}╮`; // always 70 chars
+  const BOT = `╰${'─'.repeat(W + 2)}╯`;
+
   function buildFrame(smoke) {
-    const W = 66, pad = n => ' '.repeat(Math.max(0, n));
+    const pad = n => ' '.repeat(Math.max(0, n));
+    // Strip ANSI for length measurement
     function vlen(s) { return s.replace(/\x1b\[[0-9;]*m/g, '').length; }
-    function rpad(s, w) { return s + pad(Math.max(0, w - vlen(s))); }
-    const L = inner => `│ ${rpad(inner, W)} │`;
+    // Pad to exactly W visible chars
+    function L(inner) {
+      const v = vlen(inner);
+      return `│ ${inner}${pad(Math.max(0, W - v))} │`;
+    }
+
+    const sym  = HAS_COLOR ? cc('\x1b[38;5;135m') : '';
+    const mem  = HAS_COLOR ? cc('\x1b[38;5;205m') : '';
+
     return [
-      `╭─── Claude Code Op ────────────────────────────────────────────────╮`,
+      TOP,
       L(''),
       ...smoke.map(s => L(`${pad(COL)}${C.cyan}${s}${C.reset}`)),
       L(''),
@@ -177,9 +194,9 @@ function animatedBanner() {
       L(''),
       L(`${pad(10)}${C.bold}Maximum token efficiency · Developed by Ordis AI${C.reset}`),
       L(''),
-      L(`${pad(3)}${C.orange}[CAVEMAN:ULTRA]${C.reset} ${C.green}[CTX:ON]${C.reset} ${C.cyan}[CRG:ON]${C.reset} \x1b[38;5;135m[SYM:ON]\x1b[0m \x1b[38;5;205m[MEM:ON]\x1b[0m`),
+      L(`${pad(3)}${C.orange}[CAVEMAN:ULTRA]${C.reset} ${C.green}[CTX:ON]${C.reset} ${C.cyan}[CRG:ON]${C.reset} ${sym}[SYM:ON]${C.reset} ${mem}[MEM:ON]${C.reset}`),
       L(''),
-      `╰────────────────────────────────────────────────────────────────────╯`,
+      BOT,
     ];
   }
 
@@ -314,20 +331,14 @@ function installLeanCtx() {
     info('Installing lean-ctx...');
     try {
       if (WIN) {
-        if (has('cargo')) {
-          sh('cargo install lean-ctx-bin');
-          ok('lean-ctx installed via cargo');
-        } else {
-          warn('lean-ctx on Windows requires Rust (cargo).');
-          if (ask('Install Rust (rustup) first?')) {
-            ps('irm https://win.rustup.rs -useb | iex');
-            sh('cargo install lean-ctx-bin');
-            ok('lean-ctx installed');
-          } else {
-            warn('Skipping lean-ctx.');
-            return;
-          }
-        }
+        // lean-ctx has no official Windows binary yet.
+        // Best option: WSL, or wait for a native Windows release.
+        warn('lean-ctx does not have a native Windows installer yet.');
+        warn('  Options:');
+        warn('  1. Use WSL (Windows Subsystem for Linux) and run npx claude-code-op there');
+        warn('  2. Check https://leanctx.com for a Windows release');
+        warn('  Skipping lean-ctx — other tools will still install.');
+        return;
       } else {
         sh('curl -fsSL https://leanctx.com/install.sh | sh');
         ok('lean-ctx installed');
