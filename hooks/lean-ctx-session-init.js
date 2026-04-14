@@ -3,4 +3,4 @@
 const fs = require('fs'), path = require('path'), os = require('os');
 const flagPath = path.join(os.homedir(), '.claude', '.lean-ctx-active');
 try { fs.writeFileSync(flagPath, 'on'); } catch(e) {}
-process.stdout.write('OK');
+// silent — status shown in project-init welcome line

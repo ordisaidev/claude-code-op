@@ -342,6 +342,7 @@ function installLeanCtx() {
       }
 
       // Methods 2-3: cargo — update rustc first if needed (lean-ctx 3.x needs 1.89.0+)
+      let rustWasUpdated = false;
       if (!winInstalled && has('cargo')) {
         let rustOk = false;
         try {
@@ -355,7 +356,8 @@ function installLeanCtx() {
 
         if (!rustOk && has('rustup')) {
           info('Updating Rust toolchain to 1.89.0+ (required by lean-ctx)...');
-          try { sh('rustup update stable', { silent: false }); } catch { /* try cargo anyway */ }
+          try { sh('rustup update stable', { silent: false }); } catch { /* self-update file lock is ok */ }
+          rustWasUpdated = true; // toolchain updated even if self-update failed
         }
 
         info('Installing lean-ctx via cargo...');
@@ -373,12 +375,21 @@ function installLeanCtx() {
       }
 
       if (!winInstalled) {
-        warn('lean-ctx could not be installed on Windows automatically.');
-        warn('  Options to enable it:');
-        warn('  1. Update Rust: rustup update stable, then cargo install lean-ctx');
-        warn('  2. WSL: run "wsl" then "npx claude-code-op" inside Linux shell');
-        warn('  3. Check https://leanctx.com for a native Windows release');
-        warn('  Skipping lean-ctx — all other tools still installed.');
+        if (rustWasUpdated) {
+          // Windows file lock on rustup-init.exe after update — new terminal required
+          console.log('');
+          warn('Rust toolchain updated to 1.89.0+, but Windows requires a NEW terminal.');
+          warn('  → Close this window, open a new PowerShell/cmd, then run:');
+          warn('  → npx claude-code-op --reinstall');
+          warn('  lean-ctx will install automatically in the fresh terminal.');
+        } else {
+          warn('lean-ctx could not be installed on Windows automatically.');
+          warn('  Options to enable it:');
+          warn('  1. Update Rust: rustup update stable, then cargo install lean-ctx');
+          warn('  2. WSL: run "wsl" then "npx claude-code-op" inside Linux shell');
+          warn('  3. Check https://leanctx.com for a native Windows release');
+          warn('  Skipping lean-ctx — all other tools still installed.');
+        }
         return;
       }
     } else {

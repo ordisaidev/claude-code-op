@@ -50,24 +50,26 @@ function bg(cmd, args, extraEnv = {}) {
   } catch (e) { /* silent */ }
 }
 
-const msgs = [];
-
-// code-review-graph — build graph in project dir on first visit
+// code-review-graph — build graph in project dir on first visit (background)
 const crgDb = path.join(cwd, '.code-review-graph');
-if (!fs.existsSync(crgDb)) {
-  bg('code-review-graph', ['build', '--quiet']);
-  msgs.push(`CRG: building graph for ${repoName} in background`);
-} else {
-  msgs.push(`CRG: graph ready (${repoName})`);
-}
+if (!fs.existsSync(crgDb)) bg('code-review-graph', ['build', '--quiet']);
 
-// symdex — index project dir on first visit, store in .symdex/
+// symdex — index project dir on first visit (background)
 const symDb = path.join(cwd, '.symdex');
-if (!fs.existsSync(symDb)) {
-  bg('symdex', ['index', './', '--repo', repoName], { SYMDEX_STATE_DIR: symDb });
-  msgs.push(`SYM: indexing ${repoName} in background`);
-} else {
-  msgs.push(`SYM: index ready (${repoName})`);
-}
+if (!fs.existsSync(symDb)) bg('symdex', ['index', './', '--repo', repoName], { SYMDEX_STATE_DIR: symDb });
 
-process.stdout.write(msgs.join('\n'));
+// Read current tool states for welcome line
+function flag(name) {
+  try { return fs.readFileSync(path.join(HOME, '.claude', `.${name}-active`), 'utf8').trim(); } catch { return 'on'; }
+}
+const cave = (flag('caveman') || 'ultra').toUpperCase();
+const ctx  = flag('lean-ctx') === 'off' ? 'OFF' : 'ON';
+const crg  = flag('crg')      === 'off' ? 'OFF' : 'ON';
+const sym  = flag('sym')      === 'off' ? 'OFF' : 'ON';
+const mem  = flag('mem')      === 'off' ? 'OFF' : 'ON';
+
+// Compact one-line welcome with tool states + key tools + savings
+process.stdout.write(
+  `[CAVEMAN:${cave}] [CTX:${ctx}] [CRG:${crg}] [SYM:${sym}] [MEM:${mem}] · ${repoName}\n` +
+  `ctx_read(99%) · query_graph(8x) · get_symbols(97%) · search/timeline(cross-session)`
+);
