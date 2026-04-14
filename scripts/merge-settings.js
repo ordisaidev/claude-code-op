@@ -93,7 +93,12 @@ const OUR_HOOKS = {
       { type:"command", command: h('caveman-mode-tracker.js'),  timeout:5, statusMessage:"Tracking caveman mode..."  },
       { type:"command", command: h('lean-ctx-toggle.js'),       timeout:5, statusMessage:"Checking lean-ctx state..." },
       { type:"command", command: h('graph-toggle.js'),          timeout:5, statusMessage:"Checking graph/sym state..." },
-      { type:"command", command: h('mem-toggle.js'),            timeout:5, statusMessage:"Checking mem state..."      }
+      { type:"command", command: h('mem-toggle.js'),            timeout:5, statusMessage:"Checking mem state..."      },
+      ...(!WIN ? [{
+        type:"command",
+        command: `export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; export CLAUDE_MEM_DATA_DIR="$(pwd)/.claude-mem"; _R="${PLUGIN_ROOT}"; curl -sf http://localhost:37777/health >/dev/null 2>&1 && node "$_R/scripts/bun-runner.js" "$_R/scripts/worker-service.cjs" hook claude-code session-init 2>/dev/null || true`,
+        timeout:10, statusMessage:"Initializing memory session..."
+      }] : []),
     ]
   }],
   PostToolUse: [{
@@ -134,19 +139,36 @@ let cfg = {};
 try { cfg = JSON.parse(fs.readFileSync(SETTINGS, 'utf8')); } catch(e) {}
 if (!cfg.hooks) cfg.hooks = {};
 
-// Merge: append our hook groups only if not already present (match by first hook command)
-function alreadyPresent(existingGroups, newGroup) {
-  if (!existingGroups || !existingGroups.length) return false;
-  const newCmd = newGroup.hooks && newGroup.hooks[0] && newGroup.hooks[0].command;
-  if (!newCmd) return false;
-  return existingGroups.some(g => g.hooks && g.hooks.some(h => h.command === newCmd));
+// Events where we REPLACE existing ours entries rather than append (prevents duplicates
+// that cause e.g. session-complete being called twice, killing observations)
+const REPLACE_EVENTS = new Set(['Stop', 'SessionEnd']);
+
+// Marker to identify our hooks vs user's own hooks
+function isOurHook(cmd) {
+  return ['caveman-activate','lean-ctx-session-init','project-init','smart-install',
+          'worker-service','caveman-mode-tracker','lean-ctx-toggle','graph-toggle',
+          'mem-toggle','crg-update','lean-ctx hook','combined-statusline',
+          'bun-runner','CLAUDE_MEM','lean-ctx-session'
+  ].some(marker => (cmd || '').includes(marker));
 }
 
 for (const [event, groups] of Object.entries(OUR_HOOKS)) {
   if (!cfg.hooks[event]) cfg.hooks[event] = [];
-  for (const group of groups) {
-    if (!alreadyPresent(cfg.hooks[event], group)) {
-      cfg.hooks[event].push(group);
+
+  if (REPLACE_EVENTS.has(event)) {
+    // Strip any existing entries that contain our hooks, then add fresh
+    cfg.hooks[event] = cfg.hooks[event].filter(g =>
+      !(g.hooks || []).some(h => isOurHook(h.command))
+    );
+    cfg.hooks[event].push(...groups);
+  } else {
+    // Append only if not already present (match by first hook command)
+    for (const group of groups) {
+      const newCmd = group.hooks && group.hooks[0] && group.hooks[0].command;
+      const already = newCmd && cfg.hooks[event].some(
+        g => g.hooks && g.hooks.some(h => h.command === newCmd)
+      );
+      if (!already) cfg.hooks[event].push(group);
     }
   }
 }
