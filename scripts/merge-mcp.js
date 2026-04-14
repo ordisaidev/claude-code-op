@@ -12,6 +12,9 @@ const LOCAL_BIN   = path.join(HOME, '.local', 'bin');
 const CARGO_BIN   = path.join(HOME, '.cargo', 'bin');
 const PLUGIN_ROOT = path.join(HOME, '.claude', 'plugins', 'marketplaces', 'thedotmack', 'plugin');
 const LEAN_DATA   = path.join(HOME, '.lean-ctx');
+// Default claude-mem data dir — SessionStart hook patches this to $(pwd)/.claude-mem
+// each session so the MCP server always points to the current project on restart.
+const MEM_DATA    = path.join(HOME, '.claude-mem');
 
 const MCP_SERVERS = {
   "lean-ctx": {
@@ -40,11 +43,14 @@ const MCP_SERVERS = {
     args: [path.join(PLUGIN_ROOT, 'scripts', 'mcp-server.cjs')],
     type: "stdio",
     env: {
-      CLAUDE_MEM_DATA_DIR: path.join(HOME, '.claude-mem-default'),
+      CLAUDE_MEM_DATA_DIR: MEM_DATA,
       PATH: `${path.join(HOME, '.bun', 'bin')}:${LOCAL_BIN}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`
     }
   }
 };
+
+// Ensure central mem dir exists
+fs.mkdirSync(MEM_DATA, { recursive: true });
 
 let cfg = {};
 try { cfg = JSON.parse(fs.readFileSync(CLAUDE_JSON, 'utf8')); } catch(e) {}
@@ -57,7 +63,13 @@ for (const [name, server] of Object.entries(MCP_SERVERS)) {
     added++;
     console.log(`  + MCP: ${name}`);
   } else {
-    console.log(`  ~ MCP: ${name} (already present)`);
+    // Always update claude-mem to fix stale CLAUDE_MEM_DATA_DIR
+    if (name === 'claude-mem') {
+      cfg.mcpServers[name] = server;
+      console.log(`  ↻ MCP: ${name} (updated data dir → ~/.claude-mem)`);
+    } else {
+      console.log(`  ~ MCP: ${name} (already present)`);
+    }
   }
 }
 

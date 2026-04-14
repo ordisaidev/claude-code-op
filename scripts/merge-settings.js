@@ -10,10 +10,34 @@ const os   = require('os');
 const HOME         = os.homedir();
 const HOOKS_DIR    = path.join(HOME, '.claude', 'hooks');
 const SETTINGS     = path.join(HOME, '.claude', 'settings.json');
+const CLAUDE_JSON  = path.join(HOME, '.claude.json');
 const PLUGIN_ROOT  = path.join(HOME, '.claude', 'plugins', 'marketplaces', 'thedotmack', 'plugin');
 const WIN          = process.platform === 'win32';
 
 function h(file) { return `node "${path.join(HOOKS_DIR, file)}"`; }
+
+// ── claude-mem data dir strategy ──────────────────────────────────────────
+// MCP servers start once and can't change CLAUDE_MEM_DATA_DIR dynamically.
+// Fix: SessionStart hook updates ~/.claude.json with the current project path,
+// so the NEXT session's MCP server restart picks up the right dir.
+// Also sets CLAUDE_MEM_DATA_DIR=$(pwd)/.claude-mem for the worker so data
+// lands in the project dir AND we patch .claude.json for the MCP server.
+const MEM_UPDATE_CMD = `
+_CWD="$(pwd)"
+_MEM_DIR="$_CWD/.claude-mem"
+_CLAUDE_JSON="$HOME/.claude.json"
+# Patch claude.json so MCP server uses current project dir on next restart
+node -e "
+  const fs=require('fs'),p='$_CLAUDE_JSON';
+  try {
+    const c=JSON.parse(fs.readFileSync(p,'utf8'));
+    if(c.mcpServers&&c.mcpServers['claude-mem']&&c.mcpServers['claude-mem'].env) {
+      c.mcpServers['claude-mem'].env.CLAUDE_MEM_DATA_DIR='$_MEM_DIR';
+      fs.writeFileSync(p,JSON.stringify(c,null,2));
+    }
+  } catch(e){}
+" 2>/dev/null || true
+`.trim().replace(/\n/g, '; ');
 
 // Build hook list — mem worker hooks use bash and only run on Unix
 const sessionStartHooks = [
@@ -23,13 +47,13 @@ const sessionStartHooks = [
 ];
 
 if (!WIN) {
-  // claude-mem worker hooks use bash PATH export + curl — Unix only
-  const MEM_PREFIX = `export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; export CLAUDE_MEM_DATA_DIR="$(pwd)/.claude-mem"; _R="${PLUGIN_ROOT}"; curl -sf http://localhost:37777/health >/dev/null 2>&1 &&`;
-
   sessionStartHooks.push(
+    // Patch .claude.json CLAUDE_MEM_DATA_DIR to current project dir (for next MCP restart)
+    { type:"command", command: MEM_UPDATE_CMD, timeout:5, statusMessage:"Scoping memory to project..." },
+    // claude-mem worker hooks use bash PATH export + curl
     { type:"command", command: `export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; export CLAUDE_MEM_DATA_DIR="$(pwd)/.claude-mem"; _R="${PLUGIN_ROOT}"; node "$_R/scripts/smart-install.js" 2>/dev/null || true`, timeout:60, statusMessage:"Checking claude-mem deps..." },
     { type:"command", command: `export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; export CLAUDE_MEM_DATA_DIR="$(pwd)/.claude-mem"; _R="${PLUGIN_ROOT}"; node "$_R/scripts/bun-runner.js" "$_R/scripts/worker-service.cjs" start 2>/dev/null; for i in 1 2 3 4 5; do curl -sf http://localhost:37777/health >/dev/null 2>&1 && break; sleep 1; done; exit 0`, timeout:30, statusMessage:"Starting memory worker..." },
-    { type:"command", command: `${MEM_PREFIX} node "$_R/scripts/bun-runner.js" "$_R/scripts/worker-service.cjs" hook claude-code context 2>/dev/null || true`, timeout:30, statusMessage:"Loading memory context..." }
+    { type:"command", command: `export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; export CLAUDE_MEM_DATA_DIR="$(pwd)/.claude-mem"; _R="${PLUGIN_ROOT}"; curl -sf http://localhost:37777/health >/dev/null 2>&1 && node "$_R/scripts/bun-runner.js" "$_R/scripts/worker-service.cjs" hook claude-code context 2>/dev/null || true`, timeout:30, statusMessage:"Loading memory context..." }
   );
 }
 
@@ -49,7 +73,6 @@ const OUR_HOOKS = {
   PostToolUse: [{
     matcher: "Edit|Write|Bash",
     hooks: [
-      // crg-update.sh — bash only; on Windows skip silently
       ...(!WIN ? [{ type:"command", command: `bash "${path.join(HOOKS_DIR, 'crg-update.sh')}"`, timeout:30, statusMessage:"Updating code graph..." }] : []),
       ...(!WIN ? [{
         type:"command",
@@ -60,7 +83,7 @@ const OUR_HOOKS = {
   }],
 };
 
-// PreToolUse lean-ctx redirect hooks — Unix only (lean-ctx not on Windows)
+// PreToolUse lean-ctx redirect hooks — Unix only
 if (!WIN) {
   OUR_HOOKS.PreToolUse = [
     { matcher:"Bash|bash",
@@ -72,12 +95,11 @@ if (!WIN) {
 
 // Stop / SessionEnd — mem summarize, Unix only
 if (!WIN) {
-  const MEM_PREFIX = `export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; export CLAUDE_MEM_DATA_DIR="$(pwd)/.claude-mem"; _R="${PLUGIN_ROOT}"; curl -sf http://localhost:37777/health >/dev/null 2>&1 &&`;
   OUR_HOOKS.Stop = [{
-    hooks:[{ type:"command", command:`${MEM_PREFIX} node "$_R/scripts/bun-runner.js" "$_R/scripts/worker-service.cjs" hook claude-code summarize 2>/dev/null || true`, timeout:60, statusMessage:"Saving session summary..." }]
+    hooks:[{ type:"command", command:`export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; export CLAUDE_MEM_DATA_DIR="$(pwd)/.claude-mem"; _R="${PLUGIN_ROOT}"; curl -sf http://localhost:37777/health >/dev/null 2>&1 && node "$_R/scripts/bun-runner.js" "$_R/scripts/worker-service.cjs" hook claude-code summarize 2>/dev/null || true`, timeout:60, statusMessage:"Saving session summary..." }]
   }];
   OUR_HOOKS.SessionEnd = [{
-    hooks:[{ type:"command", command:`${MEM_PREFIX} node "$_R/scripts/bun-runner.js" "$_R/scripts/worker-service.cjs" hook claude-code session-complete 2>/dev/null || true`, timeout:15, statusMessage:"Finalizing memory..." }]
+    hooks:[{ type:"command", command:`export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; export CLAUDE_MEM_DATA_DIR="$(pwd)/.claude-mem"; _R="${PLUGIN_ROOT}"; curl -sf http://localhost:37777/health >/dev/null 2>&1 && node "$_R/scripts/bun-runner.js" "$_R/scripts/worker-service.cjs" hook claude-code session-complete 2>/dev/null || true`, timeout:15, statusMessage:"Finalizing memory..." }]
   }];
 }
 
