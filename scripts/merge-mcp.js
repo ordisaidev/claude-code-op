@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Merges MCP server entries into ~/.claude.json
 // Safe: reads existing, only adds missing servers.
+// Dynamic scoping: MCP servers configured with symlink paths that the
+// SessionStart hook repoints to the current project on every session.
 
 const fs   = require('fs');
 const path = require('path');
@@ -9,17 +11,30 @@ const os   = require('os');
 const HOME        = os.homedir();
 const CLAUDE_JSON = path.join(HOME, '.claude.json');
 const LOCAL_BIN   = path.join(HOME, '.local', 'bin');
-const CARGO_BIN   = path.join(HOME, '.cargo', 'bin');
 const PLUGIN_ROOT = path.join(HOME, '.claude', 'plugins', 'marketplaces', 'thedotmack', 'plugin');
 const LEAN_DATA   = path.join(HOME, '.lean-ctx');
-// Default claude-mem data dir — SessionStart hook patches this to $(pwd)/.claude-mem
-// each session so the MCP server always points to the current project on restart.
-const MEM_DATA    = path.join(HOME, '.claude-mem');
+
+// Symlink paths — repointed by SessionStart hook on every session.
+// MCP servers resolve these on each file access → real-time per-project scoping.
+const MEM_LINK    = path.join(HOME, '.claude-mem-link');   // → $(pwd)/.claude-mem
+const SYMDEX_LINK = path.join(HOME, '.symdex-link');       // → $(pwd)/.symdex
+const CRG_LINK    = path.join(HOME, '.crg-link');          // → $(pwd)/.code-review-graph
+
+// Ensure symlink targets exist as real dirs on first install
+// (hook will repoint them on first session start)
+for (const p of [MEM_LINK, SYMDEX_LINK, CRG_LINK]) {
+  if (!fs.existsSync(p)) {
+    try { fs.mkdirSync(p, { recursive: true }); } catch { /* ok */ }
+  }
+}
 
 const MCP_SERVERS = {
   "lean-ctx": {
     command: "lean-ctx",
-    env: { LEAN_CTX_DATA_DIR: LEAN_DATA },
+    env: {
+      LEAN_CTX_DATA_DIR: LEAN_DATA,
+      // LEAN_CTX_PROJECT_ROOT injected by CLAUDE_ENV_FILE at session start
+    },
     autoApprove: [
       "ctx_read","ctx_shell","ctx_search","ctx_tree","ctx_overview","ctx_compress",
       "ctx_metrics","ctx_session","ctx_knowledge","ctx_agent","ctx_analyze","ctx_benchmark",
@@ -31,26 +46,33 @@ const MCP_SERVERS = {
   "code-review-graph": {
     command: path.join(LOCAL_BIN, 'code-review-graph'),
     args: ["serve"],
-    type: "stdio"
+    type: "stdio",
+    env: {
+      // CODE_REVIEW_GRAPH_ROOT injected dynamically via CLAUDE_ENV_FILE.
+      // crg-link symlink also repointed by SessionStart hook.
+      CODE_REVIEW_GRAPH_ROOT: CRG_LINK,
+    }
   },
   "symdex": {
     command: path.join(LOCAL_BIN, 'symdex'),
     args: ["serve"],
-    type: "stdio"
+    type: "stdio",
+    env: {
+      // Symlink repointed on every SessionStart → real-time project scoping
+      SYMDEX_STATE_DIR: SYMDEX_LINK,
+    }
   },
   "claude-mem": {
     command: "node",
     args: [path.join(PLUGIN_ROOT, 'scripts', 'mcp-server.cjs')],
     type: "stdio",
     env: {
-      CLAUDE_MEM_DATA_DIR: MEM_DATA,
+      // Symlink repointed on every SessionStart → real-time project scoping
+      CLAUDE_MEM_DATA_DIR: MEM_LINK,
       PATH: `${path.join(HOME, '.bun', 'bin')}:${LOCAL_BIN}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`
     }
   }
 };
-
-// Ensure central mem dir exists
-fs.mkdirSync(MEM_DATA, { recursive: true });
 
 let cfg = {};
 try { cfg = JSON.parse(fs.readFileSync(CLAUDE_JSON, 'utf8')); } catch(e) {}
@@ -63,13 +85,9 @@ for (const [name, server] of Object.entries(MCP_SERVERS)) {
     added++;
     console.log(`  + MCP: ${name}`);
   } else {
-    // Always update claude-mem to fix stale CLAUDE_MEM_DATA_DIR
-    if (name === 'claude-mem') {
-      cfg.mcpServers[name] = server;
-      console.log(`  ↻ MCP: ${name} (updated data dir → ~/.claude-mem)`);
-    } else {
-      console.log(`  ~ MCP: ${name} (already present)`);
-    }
+    // Always update — ensures symlink paths are in place after upgrades
+    cfg.mcpServers[name] = server;
+    console.log(`  ↻ MCP: ${name} (updated to symlink-scoped paths)`);
   }
 }
 

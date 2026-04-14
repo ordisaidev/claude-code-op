@@ -16,25 +16,51 @@ const WIN          = process.platform === 'win32';
 
 function h(file) { return `node "${path.join(HOOKS_DIR, file)}"`; }
 
-// ── claude-mem data dir strategy ──────────────────────────────────────────
-// MCP servers start once and can't change CLAUDE_MEM_DATA_DIR dynamically.
-// Fix: SessionStart hook updates ~/.claude.json with the current project path,
-// so the NEXT session's MCP server restart picks up the right dir.
-// Also sets CLAUDE_MEM_DATA_DIR=$(pwd)/.claude-mem for the worker so data
-// lands in the project dir AND we patch .claude.json for the MCP server.
-const MEM_UPDATE_CMD = `
+// ── real-time dynamic MCP scoping via symlinks ────────────────────────────
+// MCP servers start once with static env vars. To get real-time per-project
+// scoping without restarting:
+//   1. MCP servers point to stable symlink paths (~/.claude-*-link)
+//   2. SessionStart hook atomically repoints symlinks to current project dir
+//   3. MCP servers resolve symlinks on each file access → instant scoping
+// ALSO patch .claude.json for a full cold-start fix on next Claude restart.
+//
+// Symlink paths used in merge-mcp.js:
+//   ~/.claude-mem-link  → $(pwd)/.claude-mem
+//   ~/.symdex-link      → $(pwd)/.symdex
+//   ~/.crg-link         → $(pwd)/.code-review-graph
+// SCOPE_UPDATE_CMD runs on every SessionStart. Three-layer approach:
+// 1. $CLAUDE_ENV_FILE  — official Claude Code API: env vars written here are injected
+//    into ALL subsequent bash + MCP server processes in the running session (real-time).
+// 2. Symlinks          — ~/.claude-mem-link etc. atomically repointed to $(pwd) dirs.
+//    MCP servers configured to use these paths; symlinks resolve on each file access.
+// 3. .claude.json patch — ensures correct paths on next cold Claude restart.
+const SCOPE_UPDATE_CMD = `
 _CWD="$(pwd)"
-_MEM_DIR="$_CWD/.claude-mem"
-_CLAUDE_JSON="$HOME/.claude.json"
-# Patch claude.json so MCP server uses current project dir on next restart
+_HOME="$HOME"
+# Ensure target dirs exist
+mkdir -p "$_CWD/.claude-mem" "$_CWD/.symdex" "$_CWD/.code-review-graph"
+# Layer 1: inject env vars into running session via CLAUDE_ENV_FILE (official API)
+if [ -n "$CLAUDE_ENV_FILE" ]; then
+  echo "CLAUDE_MEM_DATA_DIR=$_CWD/.claude-mem" >> "$CLAUDE_ENV_FILE"
+  echo "SYMDEX_STATE_DIR=$_CWD/.symdex" >> "$CLAUDE_ENV_FILE"
+  echo "LEAN_CTX_PROJECT_ROOT=$_CWD" >> "$CLAUDE_ENV_FILE"
+  echo "CODE_REVIEW_GRAPH_ROOT=$_CWD" >> "$CLAUDE_ENV_FILE"
+fi
+# Layer 2: repoint symlinks — MCP servers follow on each file access (real-time)
+ln -sfn "$_CWD/.claude-mem"         "$_HOME/.claude-mem-link"
+ln -sfn "$_CWD/.symdex"             "$_HOME/.symdex-link"
+ln -sfn "$_CWD/.code-review-graph"  "$_HOME/.crg-link"
+# Layer 3: patch .claude.json so next cold restart is also correct
 node -e "
-  const fs=require('fs'),p='$_CLAUDE_JSON';
+  const fs=require('fs'),p='$_HOME/.claude.json',cwd='$_CWD';
   try {
     const c=JSON.parse(fs.readFileSync(p,'utf8'));
-    if(c.mcpServers&&c.mcpServers['claude-mem']&&c.mcpServers['claude-mem'].env) {
-      c.mcpServers['claude-mem'].env.CLAUDE_MEM_DATA_DIR='$_MEM_DIR';
-      fs.writeFileSync(p,JSON.stringify(c,null,2));
-    }
+    const s=c.mcpServers||{};
+    if(s['claude-mem']&&s['claude-mem'].env) s['claude-mem'].env.CLAUDE_MEM_DATA_DIR=cwd+'/.claude-mem';
+    if(s['symdex']){if(!s['symdex'].env)s['symdex'].env={};s['symdex'].env.SYMDEX_STATE_DIR=cwd+'/.symdex';}
+    if(s['lean-ctx']){if(!s['lean-ctx'].env)s['lean-ctx'].env={};s['lean-ctx'].env.LEAN_CTX_PROJECT_ROOT=cwd;}
+    if(s['code-review-graph']){if(!s['code-review-graph'].env)s['code-review-graph'].env={};s['code-review-graph'].env.CODE_REVIEW_GRAPH_ROOT=cwd;}
+    fs.writeFileSync(p,JSON.stringify(c,null,2));
   } catch(e){}
 " 2>/dev/null || true
 `.trim().replace(/\n/g, '; ');
@@ -48,8 +74,8 @@ const sessionStartHooks = [
 
 if (!WIN) {
   sessionStartHooks.push(
-    // Patch .claude.json CLAUDE_MEM_DATA_DIR to current project dir (for next MCP restart)
-    { type:"command", command: MEM_UPDATE_CMD, timeout:5, statusMessage:"Scoping memory to project..." },
+    // Patch .claude.json for all MCP servers to current project dir (takes effect on next restart)
+    { type:"command", command: SCOPE_UPDATE_CMD, timeout:5, statusMessage:"Scoping MCP tools to project..." },
     // claude-mem worker hooks use bash PATH export + curl
     { type:"command", command: `export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; export CLAUDE_MEM_DATA_DIR="$(pwd)/.claude-mem"; _R="${PLUGIN_ROOT}"; node "$_R/scripts/smart-install.js" 2>/dev/null || true`, timeout:60, statusMessage:"Checking claude-mem deps..." },
     { type:"command", command: `export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; export CLAUDE_MEM_DATA_DIR="$(pwd)/.claude-mem"; _R="${PLUGIN_ROOT}"; node "$_R/scripts/bun-runner.js" "$_R/scripts/worker-service.cjs" start 2>/dev/null; for i in 1 2 3 4 5; do curl -sf http://localhost:37777/health >/dev/null 2>&1 && break; sleep 1; done; exit 0`, timeout:30, statusMessage:"Starting memory worker..." },
