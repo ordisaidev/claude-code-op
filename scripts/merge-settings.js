@@ -125,10 +125,13 @@ if (!WIN) {
   ];
 }
 
-// Stop / SessionEnd — mem summarize, Unix only
+// Stop / SessionEnd — mem summarize + session handoff, Unix only
 if (!WIN) {
   OUR_HOOKS.Stop = [{
-    hooks:[{ type:"command", command:`export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; export CLAUDE_MEM_DATA_DIR="$(pwd)/.claude-mem"; _R="${PLUGIN_ROOT}"; curl -sf http://localhost:37777/health >/dev/null 2>&1 && node "$_R/scripts/bun-runner.js" "$_R/scripts/worker-service.cjs" hook claude-code summarize 2>/dev/null || true`, timeout:60, statusMessage:"Saving session summary..." }]
+    hooks:[
+      { type:"command", command: h('session-handoff.js'), timeout:10, statusMessage:"Writing session state..." },
+      { type:"command", command:`export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; export CLAUDE_MEM_DATA_DIR="$(pwd)/.claude-mem"; _R="${PLUGIN_ROOT}"; curl -sf http://localhost:37777/health >/dev/null 2>&1 && node "$_R/scripts/bun-runner.js" "$_R/scripts/worker-service.cjs" hook claude-code summarize 2>/dev/null || true`, timeout:60, statusMessage:"Saving session summary..." }
+    ]
   }];
   OUR_HOOKS.SessionEnd = [{
     hooks:[{ type:"command", command:`export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; export CLAUDE_MEM_DATA_DIR="$(pwd)/.claude-mem"; _R="${PLUGIN_ROOT}"; curl -sf http://localhost:37777/health >/dev/null 2>&1 && node "$_R/scripts/bun-runner.js" "$_R/scripts/worker-service.cjs" hook claude-code session-complete 2>/dev/null || true`, timeout:15, statusMessage:"Finalizing memory..." }]
@@ -149,7 +152,7 @@ function isOurHook(cmd) {
   return ['caveman-activate','lean-ctx-session-init','project-init','smart-install',
           'worker-service','caveman-mode-tracker','lean-ctx-toggle','graph-toggle',
           'mem-toggle','crg-update','lean-ctx hook','combined-statusline',
-          'bun-runner','CLAUDE_MEM','lean-ctx-session','compact-warn'
+          'bun-runner','CLAUDE_MEM','lean-ctx-session','compact-warn','session-handoff'
   ].some(marker => (cmd || '').includes(marker));
 }
 

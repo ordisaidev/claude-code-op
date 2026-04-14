@@ -69,7 +69,23 @@ const sym  = flag('sym')      === 'off' ? 'OFF' : 'ON';
 const mem  = flag('mem')      === 'off' ? 'OFF' : 'ON';
 
 // Compact one-line welcome with tool states + key tools + savings
-process.stdout.write(
-  `[CAVEMAN:${cave}] [CTX:${ctx}] [CRG:${crg}] [SYM:${sym}] [MEM:${mem}] · ${repoName}\n` +
-  `ctx_read(99%) · query_graph(8x) · get_symbols(97%) · search/timeline(cross-session)`
-);
+const out = [
+  `[CAVEMAN:${cave}] [CTX:${ctx}] [CRG:${crg}] [SYM:${sym}] [MEM:${mem}] · ${repoName}`,
+  `ctx_read(99%) · query_graph(8x) · get_symbols(97%) · search/timeline(cross-session)`,
+];
+
+// Session continuity — inject .claude-state.md if it exists
+const stateFile = path.join(cwd, '.claude-state.md');
+if (fs.existsSync(stateFile)) {
+  try {
+    const state = fs.readFileSync(stateFile, 'utf8').trim();
+    if (state) {
+      out.push('');
+      out.push('--- SESSION CONTINUING ---');
+      out.push(state);
+      out.push('--- Say "save state" to update context before ending session ---');
+    }
+  } catch {}
+}
+
+process.stdout.write(out.join('\n'));
