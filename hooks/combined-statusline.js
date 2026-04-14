@@ -49,6 +49,16 @@ process.stdin.on('end', () => {
     autoUltra = true;
   }
 
+  // ── Flag for smart auto-compact at 70% context ────────────────────────
+  // Writes flag once when crossing 70%; compact-warn hook reads it next prompt.
+  const compactFlagPath = path.join(HOME, '.claude', '.compact-needed');
+  const alreadyFlagged  = fs.existsSync(compactFlagPath);
+  if (pct >= 70 && !alreadyFlagged) {
+    try { fs.writeFileSync(compactFlagPath, String(pct)); } catch {}
+  } else if (pct < 60 && alreadyFlagged) {
+    try { fs.rmSync(compactFlagPath); } catch {} // cleared after compact
+  }
+
   // Session cost
   const cost    = (data.cost && data.cost.total_cost_usd) || 0;
   const costStr = cost > 0 ? `\x1b[33m$${cost.toFixed(3)}\x1b[0m` : '';
