@@ -329,21 +329,43 @@ function installLeanCtx() {
     warn('lean-ctx not found.');
     if (!ask('Install lean-ctx now?')) { warn('Skipping — file/shell compression disabled.'); return; }
     info('Installing lean-ctx...');
-    try {
-      if (WIN) {
-        // lean-ctx has no official Windows binary yet.
-        // Best option: WSL, or wait for a native Windows release.
-        warn('lean-ctx does not have a native Windows installer yet.');
-        warn('  Options:');
-        warn('  1. Use WSL (Windows Subsystem for Linux) and run npx claude-code-op there');
-        warn('  2. Check https://leanctx.com for a Windows release');
-        warn('  Skipping lean-ctx — other tools will still install.');
-        return;
-      } else {
-        sh('curl -fsSL https://leanctx.com/install.sh | sh');
-        ok('lean-ctx installed');
+    if (WIN) {
+      let winInstalled = false;
+
+      // Method 1: PowerShell installer (if leanctx.com provides one)
+      if (!winInstalled) {
+        info('Trying PowerShell installer...');
+        try {
+          ps('irm https://leanctx.com/install.ps1 | iex');
+          winInstalled = has('lean-ctx');
+        } catch { /* try next */ }
       }
-    } catch { warn('lean-ctx install failed — skipping'); return; }
+
+      // Method 2: cargo install (requires Rust toolchain)
+      if (!winInstalled && has('cargo')) {
+        info('Trying cargo install lean-ctx...');
+        try {
+          sh('cargo install lean-ctx', { silent: false });
+          winInstalled = has('lean-ctx');
+        } catch { /* try next */ }
+      }
+
+      if (!winInstalled) {
+        warn('lean-ctx could not be installed on Windows automatically.');
+        warn('  Options to enable it:');
+        warn('  1. WSL: run "wsl" then "npx claude-code-op" inside Linux shell');
+        warn('  2. Cargo: install Rust (rustup.rs), then "cargo install lean-ctx"');
+        warn('  3. Check https://leanctx.com for a native Windows release');
+        warn('  Skipping lean-ctx — all other tools still installed.');
+        return;
+      }
+    } else {
+      try {
+        sh('curl -fsSL https://leanctx.com/install.sh | sh');
+      } catch { warn('lean-ctx install failed — skipping'); return; }
+    }
+    if (has('lean-ctx')) ok('lean-ctx installed');
+    else { warn('lean-ctx install failed — skipping'); return; }
   } else {
     ok('lean-ctx already installed');
   }
