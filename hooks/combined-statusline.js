@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Claude Code Op — combined statusline
-// Line 1: [CAVEMAN:ULTRA] [CTX:ON] [CRG:ON] [SYM:ON] [MEM:folder]
+// Line 1: [CAVEMAN:ULTRA] [CTX:ON] [CRG:ON] [SYM:ON] [MEM:folder]  [⚠ LIMIT 5h:72% → ULTRA]
 // Line 2: Model | context bar | 5h rate | 7d rate | $cost
-// Reads session JSON from stdin (Claude Code pipes it automatically).
+// Auto-switches caveman to ultra when any rate limit >= 60%.
 
 const fs   = require('fs');
 const path = require('path');
@@ -39,6 +39,16 @@ process.stdin.on('end', () => {
   const fiveH  = rl.five_hour  && rl.five_hour.used_percentage  != null ? Math.round(rl.five_hour.used_percentage)  : null;
   const sevenD = rl.seven_day  && rl.seven_day.used_percentage  != null ? Math.round(rl.seven_day.used_percentage)  : null;
 
+  // ── Auto-caveman ultra at 60% rate limit ─────────────────────────────
+  const cavemanFlagPath = path.join(HOME, '.claude', '.caveman-active');
+  const currentCavemanMode = flag(cavemanFlagPath);
+  const rateLimitHigh = (fiveH !== null && fiveH >= 60) || (sevenD !== null && sevenD >= 60);
+  let autoUltra = false;
+  if (rateLimitHigh && currentCavemanMode !== 'ultra' && currentCavemanMode !== 'off') {
+    try { fs.writeFileSync(cavemanFlagPath, 'ultra'); } catch {}
+    autoUltra = true;
+  }
+
   // Session cost
   const cost    = (data.cost && data.cost.total_cost_usd) || 0;
   const costStr = cost > 0 ? `\x1b[33m$${cost.toFixed(3)}\x1b[0m` : '';
@@ -46,11 +56,10 @@ process.stdin.on('end', () => {
   // ── Line 1: badges ────────────────────────────────────────────────────
   const parts1 = [];
 
-  // Caveman
-  const cavemanFlag = path.join(HOME, '.claude', '.caveman-active');
-  if (fs.existsSync(cavemanFlag)) {
-    const mode  = flag(cavemanFlag) || 'full';
-    const label = (mode === 'full' || !mode) ? 'CAVEMAN' : `CAVEMAN:${mode.toUpperCase()}`;
+  // Caveman badge
+  const effectiveMode = autoUltra ? 'ultra' : (currentCavemanMode || 'ultra');
+  if (effectiveMode !== 'off') {
+    const label = `CAVEMAN:${effectiveMode.toUpperCase()}`;
     parts1.push(`\x1b[38;5;172m[${label}]\x1b[0m`);
   }
 
@@ -65,14 +74,20 @@ process.stdin.on('end', () => {
       : `\x1b[38;5;205m[MEM:${folder || 'ON'}]\x1b[0m`
   );
 
+  // Warn when auto-ultra triggered
+  if (autoUltra) {
+    const which = fiveH >= 60 ? `5h:${fiveH}%` : `7d:${sevenD}%`;
+    parts1.push(`\x1b[1;31m[⚠ LIMIT ${which} → ULTRA]\x1b[0m`);
+  }
+
   process.stdout.write(parts1.join(' ') + '\n');
 
   // ── Line 2: model | context | limits | cost ───────────────────────────
   const parts2 = [];
-  if (model)          parts2.push(`\x1b[36m${model}\x1b[0m`);
-  if (pct > 0)        parts2.push(`${bar} ${pct}%`);
-  if (fiveH  !== null) parts2.push(`5h:${fiveH}%`);
-  if (sevenD !== null) parts2.push(`7d:${sevenD}%`);
-  if (costStr)        parts2.push(costStr);
-  if (parts2.length)  process.stdout.write(parts2.join(' | '));
+  if (model)           parts2.push(`\x1b[36m${model}\x1b[0m`);
+  if (pct > 0)         parts2.push(`${bar} ${pct}%`);
+  if (fiveH  !== null) parts2.push(`5h:${fiveH >= 60 ? '\x1b[31m' : ''}${fiveH}%\x1b[0m`);
+  if (sevenD !== null) parts2.push(`7d:${sevenD >= 60 ? '\x1b[31m' : ''}${sevenD}%\x1b[0m`);
+  if (costStr)         parts2.push(costStr);
+  if (parts2.length)   process.stdout.write(parts2.join(' | '));
 });
