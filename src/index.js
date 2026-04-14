@@ -634,7 +634,7 @@ function uninstall() {
   console.log('');
   ok(`Claude Code Op removed. Restart Claude Code.`);
   console.log('');
-  console.log(`  To reinstall: ${C.cyan}npx claude-code-op --reinstall${C.reset}`);
+  console.log(`  To reinstall: ${C.cyan}npx claude-code-op@latest --reinstall${C.reset}`);
   console.log('');
 }
 
@@ -645,15 +645,44 @@ function showHelp() {
   console.log(`Developed by Ordis AI · github.com/ordisaidev/claude-code-op`);
   console.log('');
   console.log(`${C.bold}Usage:${C.reset}`);
-  console.log('  npx claude-code-op              Launch Claude Code (install on first run)');
-  console.log('  npx claude-code-op --reinstall  Force re-run the full installer');
-  console.log('  npx claude-code-op --uninstall  Remove all hooks and MCP config');
-  console.log('  npx claude-code-op --help       Show this message');
-  console.log('  npx claude-code-op -c           Pass flags through to claude');
+  console.log('  npx claude-code-op@latest              Launch Claude Code (install on first run)');
+  console.log('  npx claude-code-op@latest --reinstall  Force re-run the full installer');
+  console.log('  npx claude-code-op@latest --uninstall  Remove all hooks and MCP config');
+  console.log('  npx claude-code-op@latest --help       Show this message');
+  console.log('  npx claude-code-op@latest -c           Pass flags through to claude');
   console.log('');
   console.log(`${C.bold}What gets installed:${C.reset}`);
   console.log('  Claude Code, uv, Bun, lean-ctx, code-review-graph, symdex, Caveman, claude-mem');
   console.log('');
+  console.log(`${C.bold}Tip:${C.reset} Always use ${C.cyan}@latest${C.reset} to avoid npx version cache issues.`);
+  console.log(`  If you get "No matching version found", run: ${C.cyan}npm cache clean --force${C.reset}`);
+  console.log('');
+}
+
+// ── auto-update check ─────────────────────────────────────────────────────
+// If running a stale npx-cached version, re-exec with @latest automatically.
+function checkAndUpdate() {
+  const CURRENT = require('../package.json').version;
+  try {
+    const latest = execSync('npm view claude-code-op version', {
+      encoding: 'utf8', stdio: 'pipe',
+      env: { ...process.env, PATH: richPath() },
+      timeout: 6000,
+    }).trim();
+    if (latest && latest !== CURRENT) {
+      console.log(`\n  ${C.yellow}!${C.reset} New version available: ${C.cyan}${latest}${C.reset} (running ${CURRENT})`);
+      console.log(`  ${C.cyan}→${C.reset} Auto-updating via npx claude-code-op@latest...\n`);
+      // Clear npm cache to avoid stale metadata, then re-exec
+      try { execSync('npm cache clean --force', { stdio: 'pipe', timeout: 10000 }); } catch { /* ok */ }
+      const passArgs = process.argv.slice(2);
+      const r = spawnSync('npx', ['claude-code-op@latest', ...passArgs], {
+        stdio: 'inherit',
+        env: { ...process.env, PATH: richPath() },
+        shell: WIN,
+      });
+      process.exit(r.status ?? 0);
+    }
+  } catch { /* npm view failed — offline or rate-limited, continue with current version */ }
 }
 
 // ── main ──────────────────────────────────────────────────────────────────
@@ -662,6 +691,9 @@ const args           = process.argv.slice(2);
 
 if (args.includes('--help') || args.includes('-h')) { showHelp(); process.exit(0); }
 if (args.includes('--uninstall'))                   { uninstall(); process.exit(0); }
+
+// Auto-update: skip if already running via @latest flag or in CI
+if (!args.includes('--no-update') && !process.env.CI) checkAndUpdate();
 
 const forceInstall = args.includes('--install') || args.includes('--reinstall');
 const alreadyDone  = fs.existsSync(INSTALLED_FLAG) && !forceInstall;

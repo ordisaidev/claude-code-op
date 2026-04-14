@@ -38,7 +38,7 @@ Combined: **80–99% fewer tokens** depending on workload. See [BENEFITS.md](./B
 ### One command (recommended)
 
 ```bash
-npx claude-code-op
+npx claude-code-op@latest
 ```
 
 That's it. On first run it:
@@ -47,7 +47,9 @@ That's it. On first run it:
 3. Wires hooks, MCP servers, and the 2-line statusline into `~/.claude/`
 4. Shows the animated gigchad Claude banner and launches Claude Code
 
-On every subsequent run, `npx claude-code-op` just shows the banner and opens Claude Code. Pass `--reinstall` to re-run the full setup.
+On every subsequent run, `npx claude-code-op@latest` just shows the banner and opens Claude Code. Pass `--reinstall` to re-run the full setup.
+
+> **Always use `@latest`** — avoids npx version cache issues. The package also auto-detects when a newer version exists and re-executes automatically.
 
 > **First-time login:** Claude Code handles auth itself. When you run `claude` for the first time after install, a browser window opens for OAuth. Requires a Claude Pro / Max / Team / Enterprise account.
 
@@ -57,6 +59,7 @@ On every subsequent run, `npx claude-code-op` just shows the banner and opens Cl
 |------|--------|
 | *(none)* | Fresh install on first run, launcher on repeat runs |
 | `--reinstall` | Force re-run the full install even if already set up |
+| `--no-update` | Skip auto-update check (useful if offline) |
 | Any other args | Passed through to `claude` (e.g. `npx claude-code-op -c`) |
 
 ### Alternative (clone + bash)
