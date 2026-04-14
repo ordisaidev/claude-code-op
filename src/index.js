@@ -332,7 +332,7 @@ function installLeanCtx() {
     if (WIN) {
       let winInstalled = false;
 
-      // Method 1: PowerShell installer (if leanctx.com provides one)
+      // Method 1: PowerShell installer
       if (!winInstalled) {
         info('Trying PowerShell installer...');
         try {
@@ -341,39 +341,42 @@ function installLeanCtx() {
         } catch { /* try next */ }
       }
 
-      // Method 2: cargo install --locked (uses locked deps, avoids rustc version conflicts)
+      // Methods 2-3: cargo — update rustc first if needed (lean-ctx 3.x needs 1.89.0+)
       if (!winInstalled && has('cargo')) {
-        info('Trying cargo install lean-ctx --locked...');
+        let rustOk = false;
+        try {
+          const rv = sh('rustc --version', { silent: true }).trim();
+          const m = rv.match(/rustc (\d+)\.(\d+)/);
+          if (m) {
+            const maj = parseInt(m[1], 10), min = parseInt(m[2], 10);
+            rustOk = maj > 1 || (maj === 1 && min >= 89);
+          }
+        } catch { /* can't check, proceed */ }
+
+        if (!rustOk && has('rustup')) {
+          info('Updating Rust toolchain to 1.89.0+ (required by lean-ctx)...');
+          try { sh('rustup update stable', { silent: false }); } catch { /* try cargo anyway */ }
+        }
+
+        info('Installing lean-ctx via cargo...');
         try {
           sh('cargo install lean-ctx --locked', { silent: false });
           winInstalled = has('lean-ctx');
-        } catch { /* try next */ }
-      }
+        } catch { /* try without --locked */ }
 
-      // Method 3: cargo install without --locked (if --locked fails)
-      if (!winInstalled && has('cargo')) {
-        info('Trying cargo install lean-ctx (without --locked)...');
-        try {
-          sh('cargo install lean-ctx', { silent: false });
-          winInstalled = has('lean-ctx');
-        } catch { /* try next */ }
-      }
-
-      // Method 4: update rustup + retry (rustc too old)
-      if (!winInstalled && has('rustup')) {
-        info('Updating Rust toolchain (lean-ctx needs rustc 1.89.0+)...');
-        try {
-          sh('rustup update stable', { silent: false });
-          sh('cargo install lean-ctx --locked', { silent: false });
-          winInstalled = has('lean-ctx');
-        } catch { /* give up */ }
+        if (!winInstalled) {
+          try {
+            sh('cargo install lean-ctx', { silent: false });
+            winInstalled = has('lean-ctx');
+          } catch { /* give up */ }
+        }
       }
 
       if (!winInstalled) {
         warn('lean-ctx could not be installed on Windows automatically.');
         warn('  Options to enable it:');
-        warn('  1. WSL: run "wsl" then "npx claude-code-op" inside Linux shell');
-        warn('  2. Cargo: install Rust (rustup.rs), then "cargo install lean-ctx"');
+        warn('  1. Update Rust: rustup update stable, then cargo install lean-ctx');
+        warn('  2. WSL: run "wsl" then "npx claude-code-op" inside Linux shell');
         warn('  3. Check https://leanctx.com for a native Windows release');
         warn('  Skipping lean-ctx — all other tools still installed.');
         return;
