@@ -634,7 +634,7 @@ function uninstall() {
   console.log('');
   ok(`Claude Code Op removed. Restart Claude Code.`);
   console.log('');
-  console.log(`  To reinstall: ${C.cyan}npx claude-code-op@latest --reinstall${C.reset}`);
+  console.log(`  To reinstall: ${C.cyan}npx claude-code-op --reinstall${C.reset}`);
   console.log('');
 }
 
@@ -645,17 +645,14 @@ function showHelp() {
   console.log(`Developed by Ordis AI · github.com/ordisaidev/claude-code-op`);
   console.log('');
   console.log(`${C.bold}Usage:${C.reset}`);
-  console.log('  npx claude-code-op@latest              Launch Claude Code (install on first run)');
-  console.log('  npx claude-code-op@latest --reinstall  Force re-run the full installer');
-  console.log('  npx claude-code-op@latest --uninstall  Remove all hooks and MCP config');
-  console.log('  npx claude-code-op@latest --help       Show this message');
-  console.log('  npx claude-code-op@latest -c           Pass flags through to claude');
+  console.log('  npx claude-code-op              Launch Claude Code (install on first run)');
+  console.log('  npx claude-code-op --reinstall  Force re-run the full installer');
+  console.log('  npx claude-code-op --uninstall  Remove all hooks and MCP config');
+  console.log('  npx claude-code-op --help       Show this message');
+  console.log('  npx claude-code-op -c           Pass flags through to claude');
   console.log('');
   console.log(`${C.bold}What gets installed:${C.reset}`);
   console.log('  Claude Code, uv, Bun, lean-ctx, code-review-graph, symdex, Caveman, claude-mem');
-  console.log('');
-  console.log(`${C.bold}Tip:${C.reset} Always use ${C.cyan}@latest${C.reset} to avoid npx version cache issues.`);
-  console.log(`  If you get "No matching version found", run: ${C.cyan}npm cache clean --force${C.reset}`);
   console.log('');
 }
 
