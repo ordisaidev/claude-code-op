@@ -1,6 +1,6 @@
 {
   "name": "claude-code-op",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Maximum token efficiency for Claude Code — one install, every project.",
   "bin": {
     "claude-code-op": "bin/cli.js"

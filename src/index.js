@@ -341,13 +341,32 @@ function installLeanCtx() {
         } catch { /* try next */ }
       }
 
-      // Method 2: cargo install (requires Rust toolchain)
+      // Method 2: cargo install --locked (uses locked deps, avoids rustc version conflicts)
       if (!winInstalled && has('cargo')) {
-        info('Trying cargo install lean-ctx...');
+        info('Trying cargo install lean-ctx --locked...');
+        try {
+          sh('cargo install lean-ctx --locked', { silent: false });
+          winInstalled = has('lean-ctx');
+        } catch { /* try next */ }
+      }
+
+      // Method 3: cargo install without --locked (if --locked fails)
+      if (!winInstalled && has('cargo')) {
+        info('Trying cargo install lean-ctx (without --locked)...');
         try {
           sh('cargo install lean-ctx', { silent: false });
           winInstalled = has('lean-ctx');
         } catch { /* try next */ }
+      }
+
+      // Method 4: update rustup + retry (rustc too old)
+      if (!winInstalled && has('rustup')) {
+        info('Updating Rust toolchain (lean-ctx needs rustc 1.89.0+)...');
+        try {
+          sh('rustup update stable', { silent: false });
+          sh('cargo install lean-ctx --locked', { silent: false });
+          winInstalled = has('lean-ctx');
+        } catch { /* give up */ }
       }
 
       if (!winInstalled) {
